@@ -128,6 +128,45 @@ def run_bot(token: Optional[str] = None):
     # Build the application
     app = Application.builder().token(token).build()
 
+    # Register the command list with Telegram so they show as clickable chips
+    # in the chat UI (instead of having to type /command manually).
+    async def _post_init(app):
+        from telegram import BotCommand
+        commands = [
+            BotCommand("start", "Ọniṣọwọ́ greeting"),
+            BotCommand("help", "all commands"),
+            BotCommand("about", "about this bot"),
+            BotCommand("status", "portfolio + balance"),
+            BotCommand("balance", "USDT balance only"),
+            BotCommand("price", "current price of a symbol"),
+            BotCommand("buy", "buy $X of SYMBOL (with advisor)"),
+            BotCommand("sell", "sell $X of SYMBOL (with advisor)"),
+            BotCommand("analyze", "deep analysis + bot's TP/SL (semi-autonomous)"),
+            BotCommand("proceed", "execute the pending analysis"),
+            BotCommand("abort", "cancel a pending advisory or analysis"),
+            BotCommand("autotrade", "autonomous mode: scan + pick + execute"),
+            BotCommand("strategist", "start/stop/status/tick the autonomous loop"),
+            BotCommand("strategy", "show strategy rules"),
+            BotCommand("positions", "open positions with adaptive TP/SL"),
+            BotCommand("skills", "list all 132 skills"),
+            BotCommand("skill", "invoke a specific skill"),
+            BotCommand("journal", "recent trade journal"),
+            BotCommand("review", "7-day review"),
+            BotCommand("reflect", "recursive self-improvement"),
+            BotCommand("memory", "show memory"),
+            BotCommand("llm", "which LLM is powering me"),
+            BotCommand("llms", "supported LLM providers"),
+            BotCommand("time", "WAT time + Yoruba greeting"),
+            BotCommand("risk", "risk engine state"),
+            BotCommand("kill", "activate kill switch"),
+            BotCommand("release", "release kill switch"),
+            BotCommand("settings", "adjust limits"),
+        ]
+        await app.bot.set_my_commands(commands)
+        logger.info("Telegram bot commands registered (clickable in chat UI)")
+
+    app.post_init = _post_init
+
     # -------------------------------------------------------------------------
     # Handlers
     # -------------------------------------------------------------------------

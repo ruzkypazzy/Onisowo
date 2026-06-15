@@ -42,7 +42,8 @@ HELP_TEXT = (
     "*/reflect* — recursive self-improvement\n"
     "*/memory* — show memory\n"
     "*/llm* — which LLM is powering me\n"
-    "*/llms* — supported LLM providers\n\n"
+    "*/llms* — supported LLM providers\n"
+    "*/time* — current WAT time + Yoruba greeting\n\n"
     "*/risk* — risk engine state\n"
     "*/kill REASON* — activate kill switch\n"
     "*/release* — release kill switch\n"
@@ -83,7 +84,7 @@ def parse_command_args(text: str) -> tuple[str, dict]:
 
     if cmd in ("start", "help", "about", "status", "balance", "skills", "journal",
                "review", "reflect", "memory", "risk", "release", "settings", "pnl",
-               "llm", "llms"):
+               "llm", "llms", "time"):
         return (cmd, {})
 
     return ("ask", {"text": text})

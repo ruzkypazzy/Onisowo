@@ -97,6 +97,36 @@ def _friendly_model_name(model_id: str) -> str:
     return model_id.replace("-", " ").title()
 
 
+# WAT (West Africa Time, UTC+1) greeting helper
+# Yoruba time-of-day salutations pair the standard greeting with the time, giving the bot a personal touch
+def _wat_greeting() -> str:
+    """Return a Yoruba greeting appropriate for the current time in WAT (UTC+1, Lagos/Abuja).
+
+    Yoruba solfège: re (do'), mi (re), do (mi), etc. We use the standard Yoruba greetings:
+    - Ọniṣọwọ́ káàlẹ́   — generic "good day" (safe default)
+    - Ọniṣọwọ́ ẹ káàrọ̀  — "good morning" (before noon)
+    - Ọniṣọwọ́ ẹ káàsán  — "good afternoon" (noon–4pm)
+    - Ọniṣọwọ́ ẹ káàlẹ́  — "good evening" (4pm–7pm, also generic fallback)
+    - Ọniṣọwọ́ ẹ káàlẹ́ òru — "good night" (7pm–5am)
+
+    All times computed in WAT regardless of server timezone, so the bot greets
+    its target audience (West African users) on their local clock.
+    """
+    from datetime import datetime, timezone, timedelta
+    wat = timezone(timedelta(hours=1))  # WAT = UTC+1 (no DST in Nigeria)
+    now_wat = datetime.now(wat)
+    hour = now_wat.hour
+
+    if 5 <= hour < 12:
+        return "Ọniṣọwọ́ ẹ káàrọ̀ ☀️"  # good morning
+    elif 12 <= hour < 16:
+        return "Ọniṣọwọ́ ẹ káàsán 🌤️"  # good afternoon
+    elif 16 <= hour < 19:
+        return "Ọniṣọwọ́ ẹ káàlẹ́ 🌇"  # good evening
+    else:
+        return "Ọniṣọwọ́ ẹ káàlẹ́ òru 🌙"  # good night
+
+
 # Built once at import time, then re-built if env changes (e.g., tests)
 SYSTEM_PROMPT = _build_system_prompt()
 
@@ -157,7 +187,7 @@ class Agent:
 
     def _cmd_start(self, ctx: AgentContext) -> str:
         return (
-            "Ọniṣọwọ́ káàlẹ́! 👋\n\n"
+            f"{_wat_greeting()}! 👋\n\n"
             "I'm *Oniṣòwò* — Yoruba for *merchant*.\n\n"
             "I trade crypto on Bitget, powered by *Qwen 3.6 Plus*. "
             "I have 100+ skills, MEV awareness, sybil scoring, "
@@ -332,6 +362,31 @@ class Agent:
     def _cmd_release(self, ctx: AgentContext) -> str:
         self.risk.release_kill_switch()
         return "✅ Kill switch released. Trading resumed."
+
+    def _cmd_time(self, ctx: AgentContext) -> str:
+        """Show the current WAT time and the Yoruba greeting the bot would use."""
+        from datetime import datetime, timezone, timedelta
+        wat = timezone(timedelta(hours=1))  # WAT = UTC+1
+        utc = timezone.utc
+        now_wat = datetime.now(wat)
+        now_utc = datetime.now(utc)
+        hour = now_wat.hour
+        if 5 <= hour < 12:
+            period = "Morning (káàrọ̀)"
+        elif 12 <= hour < 16:
+            period = "Afternoon (káàsán)"
+        elif 16 <= hour < 19:
+            period = "Evening (káàlẹ́)"
+        else:
+            period = "Night (káàlẹ́ òru)"
+        return (
+            f"*Oniṣòwò's clock* 🕐\n\n"
+            f"WAT (Lagos/Abuja): `{now_wat.strftime('%Y-%m-%d %H:%M:%S')}`\n"
+            f"UTC:              `{now_utc.strftime('%Y-%m-%d %H:%M:%S')}`\n"
+            f"Period: *{period}*\n\n"
+            f"Greeting I'd use: *{_wat_greeting()}*\n\n"
+            f"_WAT = West Africa Time (UTC+1). All my greetings and timestamps use WAT so they match the local time of my target users._"
+        )
 
     def _cmd_settings(self, ctx: AgentContext) -> str:
         # Show current settings

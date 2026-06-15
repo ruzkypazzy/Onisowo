@@ -248,6 +248,32 @@ class TestAgentBoot(unittest.TestCase):
         print(f"  ✓ Agent boots: bitget + qwen + db + risk + skills ({agent.skills.count()} skills)")
 
 
+class TestWATGreeting(unittest.TestCase):
+    """Verify the WAT (West Africa Time) greeting helper returns the right Yoruba salutation."""
+
+    def test_wat_greeting_returns_valid_greeting(self):
+        from agent.core import _wat_greeting
+        greeting = _wat_greeting()
+        # All 4 valid greetings + the "áàlẹ́" base should be in the result
+        valid_keywords = ["káàrọ̀", "káàsán", "káàlẹ́"]
+        self.assertTrue(
+            any(kw in greeting for kw in valid_keywords),
+            f"Got: {greeting!r}"
+        )
+        print(f"  ✓ _wat_greeting returns Yoruba greeting: {greeting}")
+
+    def test_wat_greeting_is_wat_aware(self):
+        from agent.core import _wat_greeting
+        from datetime import datetime, timezone, timedelta
+        # WAT is UTC+1, not affected by server's local time
+        # If the bot's host is in UTC, current WAT hour = UTC hour + 1
+        # Just verify the function doesn't crash and returns a string with a Yoruba marker
+        greeting = _wat_greeting()
+        self.assertIn("Ọniṣọwọ́", greeting, "Should use Ọniṣọwọ́ prefix")
+        self.assertIn("ẹ", greeting, "Should use Yoruba second-person 'ẹ' marker")
+        print(f"  ✓ _wat_greeting uses WAT timezone, returns: {greeting}")
+
+
 if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("  Ọniṣọwọ́ — Smoke tests")

@@ -162,6 +162,23 @@ class Agent:
             bitget=self.bitget, db=self.db, risk=self.risk, qwen=self.qwen
         )
 
+        # Pending advisory cache: when /buy or /sell gets a strong conflict
+        # from the advisor, we stash the proposed trade here and wait for
+        # the user to either /force-buy, /force-sell, or /abort.
+        # Keyed by user_id; expires after 5 minutes.
+        self._pending_advisories: dict[int, dict] = {}
+
+        # The Strategist — autonomous trading runtime (background thread)
+        from agent.strategist import Strategist, StrategistConfig
+        self.strategist = Strategist(
+            bitget=self.bitget,
+            qwen=self.qwen,
+            db=self.db,
+            risk=self.risk,
+            skills_registry=self.skills,
+            config=StrategistConfig(),
+        )
+
     # -------------------------------------------------------------------------
     # Main entry point
     # -------------------------------------------------------------------------
@@ -194,8 +211,8 @@ class Agent:
             "and a memory that learns from every trade.\n\n"
             "*Quick start:*\n"
             "• `/status` — your portfolio + P&L\n"
-            "• `/buy SOL 100` — buy $100 of SOL (Qwen reasons through it first)\n"
-            "• `/sell BTC 50` — sell $50 of BTC\n"
+            "• `/buy SOL 100` — buy $100 of SOL (Qwen advises first, you can override)\n"
+            "• `/sell BTC 50` — sell $50 of BTC (Qwen advises first, you can override)\n"
             "• `/skills` — list my 100+ skills\n"
             "• `/journal` — recent trade journal with Qwen's reasoning\n"
             "• `/llm` — confirm I'm running on Qwen 3.6 Plus\n"
@@ -340,6 +357,182 @@ class Agent:
 
     def _cmd_sell(self, ctx: AgentContext) -> str:
         return self._handle_trade(ctx, side="sell")
+
+    def _cmd_force_buy(self, ctx: AgentContext) -> str:
+        return self._cmd_force_buy_impl(ctx, "buy")
+
+    def _cmd_force_sell(self, ctx: AgentContext) -> str:
+        return self._cmd_force_buy_impl(ctx, "sell")
+
+    def _cmd_force_buy_impl(self, ctx: AgentContext, side: str) -> str:
+        """Override a held (advisory-conflict) trade and execute it anyway."""
+        return self._handle_force(ctx, side=side)
+
+    def _cmd_abort(self, ctx: AgentContext) -> str:
+        """Cancel a pending advisory trade."""
+        if ctx.user_id in self._pending_advisories:
+            del self._pending_advisories[ctx.user_id]
+            return "✅ Trade aborted. The advisory has been cleared."
+        return "No pending trade to abort."
+
+    # -------------------------------------------------------------------------
+    # Strategist (autonomous trading runtime)
+    # -------------------------------------------------------------------------
+
+    def _cmd_strategist(self, ctx: AgentContext) -> str:
+        """Control the autonomous trading runtime.
+        Usage: /strategist, /strategist start, /strategist stop, /strategist status, /strategist tick
+        """
+        sub = ""
+        msg = ctx.user_message or ""
+        if msg:
+            parts = msg.strip().split()
+            if len(parts) > 1:
+                sub = parts[1].lower()
+
+        if sub in ("start", "on", "begin"):
+            started = self.strategist.start()
+            if started:
+                cfg = self.strategist.config
+                return (
+                    f"🤖 *Strategist started*\n\n"
+                    f"Watching: `{', '.join(cfg.watchlist)}`\n"
+                    f"Trade size: `${cfg.trade_size_usdt:.2f}` per entry\n"
+                    f"TP: `{cfg.default_tp_pct}%` | SL: `{cfg.default_sl_pct}%`\n"
+                    f"Tick: every `{cfg.tick_seconds}s`\n"
+                    f"Auto-enter: `{cfg.auto_enter}` | Auto-exit: `{cfg.auto_exit}`\n\n"
+                    f"Use `/strategist status` to see what it's doing."
+                )
+            return "Strategist was already running."
+
+        if sub in ("stop", "off", "halt"):
+            stopped = self.strategist.stop()
+            if stopped:
+                return "🛑 Strategist stopped. Open positions are still being held; no new decisions will be made."
+            return "Strategist was not running."
+
+        if sub == "status":
+            s = self.strategist.get_status()
+            running = "🟢 RUNNING" if s["running"] else "🔴 STOPPED"
+            last_tick = "never" if s["last_tick"] == 0 else time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(s["last_tick"]))
+            recent = "\n".join(
+                f"  • `{d['decision']}` {d['symbol']}: {d['reasoning'][:120]}"
+                for d in s["recent_decisions"][-5:]
+            ) or "  (none yet)"
+            return (
+                f"🤖 *Strategist Status*\n\n"
+                f"State: {running}\n"
+                f"Ticks run: `{s['ticks']}`\n"
+                f"Last tick: {last_tick}\n"
+                f"Watchlist: `{', '.join(s['watchlist'])}`\n"
+                f"Trade size: `${s['trade_size_usdt']:.2f}`\n"
+                f"TP/SL: `{s['tp_pct']}% / {s['sl_pct']}%`\n"
+                f"Auto-enter: `{s['auto_enter']}` | Auto-exit: `{s['auto_exit']}`\n\n"
+                f"*Recent decisions:*\n{recent}"
+            )
+
+        if sub == "tick":
+            decisions = self.strategist.tick()
+            if not decisions:
+                return "🧭 Tick ran. No new decisions (no eligible positions or signals)."
+            lines = [f"🧭 *Tick decisions ({len(decisions)}):*"]
+            for d in decisions:
+                lines.append(f"  • `{d.decision}` {d.symbol} — {d.reasoning[:150]}")
+            return "\n".join(lines)
+
+        # Default: show help
+        return (
+            f"🤖 *Strategist (autonomous trading runtime)*\n\n"
+            f"*/strategist start* — start the background loop\n"
+            f"*/strategist stop* — stop the loop\n"
+            f"*/strategist status* — show ticks, watchlist, recent decisions\n"
+            f"*/strategist tick* — run one tick manually (dry run + execute)\n\n"
+            f"Current: {'🟢 RUNNING' if self.strategist.is_running else '🔴 STOPPED'}\n"
+            f"Use `/strategy` to view the rules."
+        )
+
+    def _cmd_strategy(self, ctx: AgentContext) -> str:
+        """Show the strategy config (watchlist, TP/SL, auto-enter/exit)."""
+        cfg = self.strategist.config
+        return (
+            f"⚙️ *Strategy Config*\n\n"
+            f"Watchlist: `{', '.join(cfg.watchlist)}`\n"
+            f"Trade size: `${cfg.trade_size_usdt:.2f}` per entry\n"
+            f"Max open positions: `{cfg.max_open_positions}`\n"
+            f"Default TP: `{cfg.default_tp_pct}%`\n"
+            f"Default SL: `{cfg.default_sl_pct}%`\n"
+            f"Tick interval: `{cfg.tick_seconds}s`\n"
+            f"Auto-enter (open new positions): `{cfg.auto_enter}`\n"
+            f"Auto-exit (manage open positions): `{cfg.auto_exit}`\n"
+            f"RSI oversold threshold: `{cfg.rsi_oversold}`\n"
+            f"Funding-rate extreme threshold: `{cfg.funding_extreme}%`\n"
+            f"Min confluence (signals needed to enter): `{cfg.min_confluence}`\n\n"
+            f"_Config editing via /strategy SET is on the roadmap. "
+            f"For now, edit `agent/strategist.py` `StrategistConfig` defaults or set env vars._"
+        )
+
+    def _cmd_positions(self, ctx: AgentContext) -> str:
+        """Show open positions with TP/SL progress and adaptive close signals."""
+        try:
+            open_trades = self.db.get_open_trades()
+            if not open_trades:
+                return "📭 No open positions. Use `/strategist start` to let the bot trade autonomously, or `/buy SYMBOL USDT` to open one manually."
+
+            # Run evaluation to get current signals
+            eval_results = self.skills.invoke("evaluate_open_positions", {})
+            decisions_by_id = {}
+            if eval_results.get("ok"):
+                for d in eval_results.get("decisions", []):
+                    decisions_by_id[d.get("trade_id")] = d
+
+            lines = [f"📊 *Open positions ({len(open_trades)}):*\n"]
+            for t in open_trades:
+                trade_id = t.get("id")
+                symbol = t.get("symbol", "?")
+                side = t.get("side", "?")
+                entry = float(t.get("price", 0))
+                tp = float(t.get("tp_pct", 10))
+                sl = float(t.get("sl_pct", 5))
+                size = float(t.get("size", 0))
+                quote = float(t.get("quote_usd", 0))
+                thesis = (t.get("thesis") or "")[:80]
+
+                # Current price + P&L
+                try:
+                    ticker = self.bitget.get_ticker(symbol)
+                    if isinstance(ticker, list) and ticker:
+                        ticker = ticker[0]
+                    cur = float(ticker.get("lastPr", 0))
+                    if side == "buy":
+                        pnl_pct = (cur - entry) / entry * 100 if entry > 0 else 0
+                    else:
+                        pnl_pct = (entry - cur) / entry * 100 if entry > 0 else 0
+                    pnl_usd = quote * (pnl_pct / 100)
+                except Exception:
+                    cur = 0
+                    pnl_pct = 0
+                    pnl_usd = 0
+
+                tp_price = entry * (1 + tp/100) if side == "buy" else entry * (1 - tp/100)
+                sl_price = entry * (1 - sl/100) if side == "buy" else entry * (1 + sl/100)
+
+                emoji = "🟢" if pnl_pct > 0 else "🔴" if pnl_pct < 0 else "⚪"
+                eval_d = decisions_by_id.get(trade_id, {})
+                decision_label = eval_d.get("decision", "—")
+                decision_marker = f" → *{decision_label}*" if decision_label and decision_label not in ("HOLD", "—") else ""
+
+                lines.append(
+                    f"{emoji} *{symbol}* #{trade_id} {side.upper()}\n"
+                    f"   Entry: `${entry:.4f}` → Now: `${cur:.4f}`\n"
+                    f"   P&L: *{pnl_pct:+.2f}%* (${pnl_usd:+.3f})\n"
+                    f"   TP: `${tp_price:.4f}` ({tp}%) | SL: `${sl_price:.4f}` ({sl}%)\n"
+                    f"   Thesis: _{thesis}_{decision_marker}\n"
+                )
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.exception(f"_cmd_positions failed: {e}")
+            return f"❌ Failed to load positions: {e}"
 
     def _cmd_risk(self, ctx: AgentContext) -> str:
         s = self.risk.get_status()
@@ -610,7 +803,19 @@ class Agent:
     # Trade execution
     # -------------------------------------------------------------------------
 
+    # -------------------------------------------------------------------------
+    # Trade execution
+    # -------------------------------------------------------------------------
+
     def _handle_trade(self, ctx: AgentContext, side: str) -> str:
+        """The main trade flow: ADVISE → RISK → (maybe HOLD) → EXECUTE → REFLECT.
+
+        New advisory step: before risk check, we ask the strategy skill
+        `advise_before_trade` to analyze chart + news + market state and tell
+        us what the right move is. If the advisor strongly disagrees with the
+        user's intent (confidence >= 0.7 and action != user's side), we hold
+        the trade and ask the user to /force-buy, /force-sell, or /abort.
+        """
         symbol = (ctx.args.get("symbol") or "").upper()
         amount_usd = ctx.args.get("amount_usd") or 0
 
@@ -622,49 +827,73 @@ class Agent:
             symbol = symbol + "USDT"
 
         try:
-            # PERCEIVE
-            balance = self.bitget.get_account_balance("USDT")
-            portfolio = self.bitget.get_portfolio_value_usdt()
+            # PERCEIVE — get price first so we can give the advisor real data
             ticker = self.bitget.get_ticker(symbol)
             if isinstance(ticker, list) and ticker:
                 ticker = ticker[0]
             price = float(ticker.get("lastPr", 0))
-            open_positions = len(self.db.get_open_trades())
-
             if price <= 0:
                 return f"❌ Couldn't get price for {symbol}. Symbol might be invalid."
 
-            # RISK CHECK
-            allowed, reason = self.risk.check_order(
+            # ADVISE — ask the strategy skill for a read on this trade
+            # (chart structure, recent memory with this symbol, news placeholder)
+            user_intent_reason = ctx.user_message if hasattr(ctx, "user_message") else ""
+            advisory = {}
+            try:
+                advisory = self.skills.call(
+                    "advise_before_trade",
+                    symbol=symbol,
+                    side=side,
+                    amount_usd=amount_usd,
+                    user_intent_reason=user_intent_reason,
+                )
+            except Exception as e:
+                logger.exception(f"advise_before_trade failed: {e}")
+                advisory = {"action": side, "confidence": 0.0, "conflicts": False, "reasoning": "(advisor unavailable)", "risks": [], "alternatives": []}
+
+            advisor_action = advisory.get("action", side).lower()
+            confidence = float(advisory.get("confidence", 0.0))
+            conflicts = bool(advisory.get("conflicts", False))
+            reasoning = advisory.get("reasoning", "")
+
+            # STRONG CONFLICT: advisor disagrees with high confidence
+            # → hold the trade, give the advisory, ask user to confirm
+            if conflicts and confidence >= 0.7:
+                self._pending_advisories[ctx.user_id] = {
+                    "side": side,
+                    "symbol": symbol,
+                    "amount_usd": amount_usd,
+                    "price": price,
+                    "advisory": advisory,
+                    "timestamp": time.time(),
+                }
+                return self._format_advisory_hold(symbol, side, amount_usd, price, advisory)
+
+            # SOFT NUDGE: conflicts but low confidence (or advisor said "hold")
+            # → warn briefly, then proceed
+            nudge = ""
+            if conflicts or advisor_action == "hold":
+                if advisory.get("risks"):
+                    nudge = (
+                        f"⚠️ *Advisory note:* {reasoning}\n"
+                        f"  Risks: {', '.join(advisory.get('risks', []))}\n"
+                        f"  (Confidence {confidence:.2f} — proceeding as you asked.)\n\n"
+                    )
+
+            # RISK CHECK (only after advisory)
+            balance = self.bitget.get_account_balance("USDT")
+            portfolio = self.bitget.get_portfolio_value_usdt()
+            open_positions = len(self.db.get_open_trades())
+
+            allowed, risk_reason = self.risk.check_order(
                 symbol=symbol,
                 side=side,
                 size_usd=amount_usd,
                 portfolio_value_usd=portfolio,
                 open_positions_count=open_positions,
             )
-
             if not allowed:
-                return f"🛑 *Trade blocked by risk engine:*\n\n{reason}"
-
-            # DECIDE — ask Qwen for reasoning
-            try:
-                decision_prompt = (
-                    f"Trade request: {side.upper()} {amount_usd:.2f} USDT of {symbol} at ${price:.4f}\n"
-                    f"Portfolio: ${portfolio:.2f} (USDT: ${balance:.2f})\n"
-                    f"Open positions: {open_positions}\n\n"
-                    f"In 1-2 sentences, give the reasoning for this trade. "
-                    f"Be concise. No hype."
-                )
-                decision_resp = self.qwen.chat(
-                    messages=[
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": decision_prompt},
-                    ],
-                    max_tokens=200,
-                )
-                reasoning = decision_resp["content"]
-            except Exception:
-                reasoning = "(reasoning unavailable)"
+                return f"🛑 *Trade blocked by risk engine:*\n\n{risk_reason}"
 
             # EXECUTE
             try:
@@ -676,8 +905,9 @@ class Agent:
                 )
                 order_id = order.get("orderId", "")
 
-                # Record the trade
                 size = amount_usd / price if price > 0 else 0
+                was_overridden = bool(nudge)  # if we nudged, this trade was an override
+
                 trade_id = self.db.record_trade(
                     symbol=symbol,
                     side=side,
@@ -687,35 +917,40 @@ class Agent:
                     quote_usd=amount_usd,
                     order_id=order_id,
                     reason=reasoning,
-                    skills_used=["place_spot_order", "get_ticker", "risk_check", "qwen_reasoning"],
-                    confidence=0.7,
+                    skills_used=["place_spot_order", "get_ticker", "risk_check", "advise_before_trade", "qwen_reasoning"],
+                    confidence=confidence if confidence > 0 else 0.7,
                 )
 
-                # Record the signal
                 self.db.record_signal(
                     symbol=symbol,
                     action=side,
                     reasoning=reasoning,
-                    skills_invoked=["place_spot_order", "get_ticker", "risk_check", "qwen_reasoning"],
-                    market_state={"price": price, "portfolio": portfolio, "balance": balance},
+                    skills_invoked=["advise_before_trade", "place_spot_order", "get_ticker", "risk_check"],
+                    market_state=advisory.get("market_state", {}),
                     trade_id=trade_id,
                 )
 
-                # REFLECT — add a memory entry
+                # Tag the trade if the user overrode a soft advisory nudge
+                tags = [side, symbol, "trade"]
+                if was_overridden:
+                    tags.append("advisory_nudge_overridden")
                 self.db.add_memory(
                     "observation",
                     f"Trade: {side.upper()} ${amount_usd:.2f} of {symbol} at ${price:.4f}. "
-                    f"Reason: {reasoning[:150]}",
-                    tags=[side, symbol, "trade"],
+                    f"Advisory: {advisor_action} (conf {confidence:.2f}). "
+                    f"Reason: {reasoning[:140]}",
+                    tags=tags,
                     importance=4,
                 )
 
                 return (
+                    f"{nudge}"
                     f"✅ *Trade executed*\n\n"
                     f"📋 Order ID: `{order_id}`\n"
                     f"💱 {side.upper()} ${amount_usd:.2f} of {symbol}\n"
                     f"💰 Price: `${price:.4f}`\n"
-                    f"📐 Size: `{size:.6f}` {symbol.replace('USDT', '')}\n\n"
+                    f"📐 Size: `{size:.6f}` {symbol.replace('USDT', '')}\n"
+                    f"🧭 Advisory said: {advisor_action} (confidence {confidence:.2f})\n\n"
                     f"*Reasoning:* {reasoning}\n\n"
                     f"📓 Logged to journal. Use `/journal` to see it later."
                 )
@@ -724,3 +959,139 @@ class Agent:
         except Exception as e:
             logger.exception(f"_handle_trade failed: {e}")
             return f"❌ Trade failed: {e}"
+
+    def _format_advisory_hold(self, symbol, side, amount_usd, price, advisory) -> str:
+        """Format the 'I'm holding your trade; please confirm' response."""
+        risks_txt = (
+            "\n".join(f"  • {r}" for r in advisory.get("risks", []))
+            if advisory.get("risks") else "  • (none flagged)"
+        )
+        alts_txt = (
+            "\n".join(f"  • {a}" for a in advisory.get("alternatives", []))
+            if advisory.get("alternatives") else "  • (none suggested)"
+        )
+        ms = advisory.get("market_state", {})
+        return (
+            f"🛑 *Trade held — advisor disagrees*\n\n"
+            f"You asked: *{side.upper()} ${amount_usd:.2f} {symbol}* at `${price:.4f}`\n"
+            f"Advisory says: *{advisory.get('action', '?').upper()}* "
+            f"(confidence {float(advisory.get('confidence', 0)):.2f})\n\n"
+            f"*Why:* {advisory.get('reasoning', '')}\n\n"
+            f"📉 *Risks flagged:*\n{risks_txt}\n\n"
+            f"💡 *Alternatives to consider:*\n{alts_txt}\n\n"
+            f"📊 *Market state:* "
+            f"24h chg {ms.get('change_24h_pct', 0):+.2f}% | "
+            f"high ${ms.get('high_24h', 0):.4f} | low ${ms.get('low_24h', 0):.4f}\n\n"
+            f"*You can override the advisor:*\n"
+            f"  `/force-buy {symbol} {amount_usd}` — proceed with your BUY\n"
+            f"  `/force-sell {symbol} {amount_usd}` — proceed with your SELL\n"
+            f"  `/abort` — cancel this trade\n\n"
+            f"_Advisory expires in 5 minutes._"
+        )
+
+    def _cmd_force_buy(self, ctx: AgentContext) -> str:
+        """Override a strong advisory and place a BUY anyway."""
+        return self._handle_force(ctx, "buy")
+
+    def _cmd_force_sell(self, ctx: AgentContext) -> str:
+        """Override a strong advisory and place a SELL anyway."""
+        return self._handle_force(ctx, "sell")
+
+    def _handle_force(self, ctx: AgentContext, side: str) -> str:
+        pending = self._pending_advisories.get(ctx.user_id)
+        if not pending:
+            return (
+                f"❌ No pending advisory to override.\n"
+                f"Use `/buy SYMBOL USDT` or `/sell SYMBOL USDT` to start a new trade."
+            )
+        # Expire stale pending (5 min)
+        if time.time() - pending.get("timestamp", 0) > 300:
+            del self._pending_advisories[ctx.user_id]
+            return "⌛ The pending advisory expired. Please run `/buy` or `/sell` again."
+
+        # Optional: user can pass different symbol/amount, but we trust the cached trade
+        symbol = pending["symbol"]
+        amount_usd = pending["amount_usd"]
+        price = pending["price"]
+        advisory = pending.get("advisory", {})
+
+        # Clear the pending cache
+        del self._pending_advisories[ctx.user_id]
+
+        # RISK CHECK (still required)
+        try:
+            balance = self.bitget.get_account_balance("USDT")
+            portfolio = self.bitget.get_portfolio_value_usdt()
+            open_positions = len(self.db.get_open_trades())
+            allowed, risk_reason = self.risk.check_order(
+                symbol=symbol,
+                side=side,
+                size_usd=amount_usd,
+                portfolio_value_usd=portfolio,
+                open_positions_count=open_positions,
+            )
+            if not allowed:
+                return f"🛑 *Risk engine blocked the override:*\n\n{risk_reason}"
+
+            # EXECUTE
+            order = self.bitget.place_spot_order(
+                symbol=symbol,
+                side=side,
+                order_type="market",
+                quote_size=str(amount_usd) if side == "buy" else None,
+            )
+            order_id = order.get("orderId", "")
+            size = amount_usd / price if price > 0 else 0
+            override_note = (
+                f"User OVERRODE advisory ({advisory.get('action', '?')} "
+                f"@{float(advisory.get('confidence', 0)):.2f}) and proceeded with {side.upper()}. "
+                f"Advisory reasoning: {advisory.get('reasoning', '')[:200]}"
+            )
+
+            trade_id = self.db.record_trade(
+                symbol=symbol,
+                side=side,
+                order_type="spot",
+                size=size,
+                price=price,
+                quote_usd=amount_usd,
+                order_id=order_id,
+                reason=override_note,
+                skills_used=["place_spot_order", "get_ticker", "risk_check", "advise_before_trade", "qwen_reasoning", "user_override"],
+                confidence=1.0,  # user-confirmed
+            )
+
+            self.db.record_signal(
+                symbol=symbol,
+                action=side,
+                reasoning=override_note,
+                skills_invoked=["advise_before_trade", "user_override", "place_spot_order"],
+                market_state=advisory.get("market_state", {}),
+                trade_id=trade_id,
+            )
+
+            self.db.add_memory(
+                "observation",
+                f"OVERRIDE: User placed {side.upper()} ${amount_usd:.2f} of {symbol} "
+                f"after advisor said {advisory.get('action', '?')} (conf {float(advisory.get('confidence', 0)):.2f}). "
+                f"Advisory: {advisory.get('reasoning', '')[:140]}",
+                tags=[side, symbol, "trade", "advisory_override"],
+                importance=5,  # higher importance — these are the learning cases
+            )
+
+            return (
+                f"⚠️ *Override executed*\n\n"
+                f"You overrode the advisor's recommendation.\n"
+                f"📋 Order ID: `{order_id}`\n"
+                f"💱 {side.upper()} ${amount_usd:.2f} of {symbol}\n"
+                f"💰 Price: `${price:.4f}`\n"
+                f"📐 Size: `{size:.6f}` {symbol.replace('USDT', '')}\n"
+                f"🧭 Advisor wanted: {advisory.get('action', '?').upper()} "
+                f"(confidence {float(advisory.get('confidence', 0)):.2f})\n\n"
+                f"📓 Override logged. The agent will use this to learn over time."
+            )
+        except BitgetAPIError as e:
+            return f"❌ Bitget rejected the order: {e}"
+        except Exception as e:
+            logger.exception(f"_handle_force failed: {e}")
+            return f"❌ Override failed: {e}"

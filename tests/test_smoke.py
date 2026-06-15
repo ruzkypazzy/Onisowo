@@ -273,6 +273,139 @@ class TestWATGreeting(unittest.TestCase):
         self.assertIn("ẹ", greeting, "Should use Yoruba second-person 'ẹ' marker")
         print(f"  ✓ _wat_greeting uses WAT timezone, returns: {greeting}")
 
+    def test_advise_before_trade_skill_registered(self):
+        """Verify the new advise_before_trade skill is registered and has expected params."""
+        from agent.core import Agent
+        agent = Agent()
+        skill = agent.skills.skills.get("advise_before_trade")
+        self.assertIsNotNone(skill, "advise_before_trade skill must be registered")
+        self.assertEqual(skill.category, "strategy")
+        self.assertIn("symbol", skill.parameters)
+        self.assertIn("side", skill.parameters)
+        self.assertIn("amount_usd", skill.parameters)
+        print("  ✓ advise_before_trade skill is registered with correct params")
+
+    def test_advise_before_trade_returns_structured_advisory(self):
+        """Mock Qwen and Bitget to verify the skill returns an advisory dict."""
+        from agent.core import Agent
+        from unittest.mock import MagicMock
+        agent = Agent()
+        agent.bitget.get_ticker = MagicMock(return_value={"lastPr": "150.5", "change24h": "+2.1", "high24h": "153", "low24h": "147", "baseVolume": "1000000"})
+        agent.skills._s_funding_hist = MagicMock(return_value={"note": "stub"})
+        agent.skills._s_get_candles = MagicMock(return_value=[[0, "147", "148", "147", "150.5", "100"]] * 24)
+        agent.qwen.chat = MagicMock(return_value={"content": (
+            "action: hold\n"
+            "confidence: 0.85\n"
+            "reasoning: RSI is overbought; chase risk is high.\n"
+            "risks: overbought RSI, resistance nearby, low volume\n"
+            "alternatives: wait for pullback to $147, set limit buy"
+        )})
+        result_wrapper = agent.skills.invoke("advise_before_trade", {"symbol": "ETHUSDT", "side": "buy", "amount_usd": 10.0, "user_intent_reason": "FOMO"})
+        result = result_wrapper.get("result", result_wrapper)
+        self.assertEqual(result["action"], "hold")
+        self.assertGreaterEqual(result["confidence"], 0.7)
+        # hold = soft conflict (advisor says "don't trade" but doesn't disagree with direction)
+        self.assertFalse(result["conflicts"], "hold is a soft conflict, not a hard conflict")
+        self.assertIn("RSI", result["reasoning"])
+        self.assertGreater(len(result["risks"]), 0)
+        self.assertGreater(len(result["alternatives"]), 0)
+        print(f"  ✓ advise_before_trade returns structured advisory: action={result['action']} conf={result['confidence']:.2f}")
+
+    def test_pending_advisory_clears_on_abort(self):
+        """The Agent's _pending_advisories dict should support set + clear."""
+        from agent.core import Agent
+        from dataclasses import dataclass
+        agent = Agent()
+
+        @dataclass
+        class FakeCtx:
+            user_id: int = 12345
+            command: str = "buy"
+            args: dict = None
+            user_message: str = ""
+        ctx = FakeCtx(args={"symbol": "SOL", "amount_usd": 2}, user_message="test")
+        agent._pending_advisories[ctx.user_id] = {"side": "buy", "symbol": "SOLUSDT", "amount_usd": 2, "price": 150, "advisory": {}, "timestamp": 1e12}
+        self.assertIn(ctx.user_id, agent._pending_advisories)
+        out = agent._cmd_abort(ctx)
+        self.assertNotIn(ctx.user_id, agent._pending_advisories)
+        self.assertIn("aborted", out.lower())
+        print("  ✓ /abort clears the pending advisory cache")
+
+    def test_strategist_adaptive_close_early_tp(self):
+        """The 5%-with-fading-thesis scenario: should CLOSE_EARLY_TP."""
+        from agent.core import Agent
+        from agent.strategist import Strategist, StrategistConfig, CLOSE_EARLY_TP, HOLD
+        from unittest.mock import MagicMock
+        agent = Agent()
+        # Mock a trade that's 5% up with a 10% TP target
+        trade = {
+            "id": 999, "symbol": "ETHUSDT", "side": "buy",
+            "price": 100.0,  # entry
+            "tp_pct": 10.0, "sl_pct": 5.0,
+            "thesis": "RSI oversold bounce",
+            "size": 0.1, "quote_usd": 10.0,
+        }
+        # Mock current price at 5% gain
+        agent.bitget.get_ticker = MagicMock(return_value={"lastPr": "105.0"})
+        # Mock RSI at 70 (overbought = thesis decayed)
+        agent.skills.invoke = MagicMock(side_effect=lambda name, args: {
+            "ok": True, "result": {"rsi": 70.0}
+        } if name == "rsi" else {"ok": True, "result": []})
+        cfg = StrategistConfig()
+        st = Strategist(bitget=agent.bitget, qwen=agent.qwen, db=agent.db, risk=agent.risk, skills_registry=agent.skills, config=cfg)
+        d = st._evaluate_position(trade)
+        # 5% gain with momentum=0.3, thesis_decay=0.9 → tp_reachable = 0.3*0.1 = 0.03 (low) AND progress=0.5 > 0.3 AND pnl>0
+        self.assertEqual(d.decision, CLOSE_EARLY_TP, f"Expected CLOSE_EARLY_TP, got {d.decision}: {d.reasoning}")
+        self.assertIn("Adaptive early-TP", d.reasoning)
+        self.assertGreater(d.metrics["pnl_pct"], 0)
+        print(f"  ✓ 5%-with-decayed-thesis triggers CLOSE_EARLY_TP: {d.reasoning[:80]}...")
+
+    def test_strategist_hold_when_thesis_intact(self):
+        """Trade 2% up, momentum strong, thesis not decayed → HOLD."""
+        from agent.core import Agent
+        from agent.strategist import Strategist, StrategistConfig, HOLD
+        from unittest.mock import MagicMock
+        agent = Agent()
+        trade = {"id": 998, "symbol": "ETHUSDT", "side": "buy", "price": 100.0, "tp_pct": 10.0, "sl_pct": 5.0, "thesis": "RSI oversold bounce", "size": 0.1, "quote_usd": 10.0}
+        agent.bitget.get_ticker = MagicMock(return_value={"lastPr": "102.0"})
+        # RSI still low (not overbought)
+        agent.skills.invoke = MagicMock(side_effect=lambda name, args: {"ok": True, "result": {"rsi": 35.0}} if name == "rsi" else {"ok": True, "result": []})
+        cfg = StrategistConfig()
+        st = Strategist(bitget=agent.bitget, qwen=agent.qwen, db=agent.db, risk=agent.risk, skills_registry=agent.skills, config=cfg)
+        d = st._evaluate_position(trade)
+        self.assertEqual(d.decision, HOLD, f"Expected HOLD, got {d.decision}: {d.reasoning}")
+        print(f"  ✓ Strong-thesis 2% gain holds: {d.reasoning[:80]}...")
+
+    def test_strategist_sl_hit(self):
+        """Price hits the SL level → CLOSE_SL."""
+        from agent.core import Agent
+        from agent.strategist import Strategist, StrategistConfig, CLOSE_SL
+        from unittest.mock import MagicMock
+        agent = Agent()
+        trade = {"id": 997, "symbol": "ETHUSDT", "side": "buy", "price": 100.0, "tp_pct": 10.0, "sl_pct": 5.0, "thesis": "test", "size": 0.1, "quote_usd": 10.0}
+        # Price crashed to 94 (below 5% SL = $95)
+        agent.bitget.get_ticker = MagicMock(return_value={"lastPr": "94.0"})
+        agent.skills.invoke = MagicMock(return_value={"ok": True, "result": {"rsi": 20.0}})
+        cfg = StrategistConfig()
+        st = Strategist(bitget=agent.bitget, qwen=agent.qwen, db=agent.db, risk=agent.risk, skills_registry=agent.skills, config=cfg)
+        d = st._evaluate_position(trade)
+        self.assertEqual(d.decision, CLOSE_SL, f"Expected CLOSE_SL, got {d.decision}")
+        print(f"  ✓ SL price hit triggers CLOSE_SL: {d.reasoning[:80]}...")
+
+    def test_strategist_tick_runs(self):
+        """A full tick with no open positions and no signals returns empty decisions."""
+        from agent.core import Agent
+        from agent.strategist import Strategist, StrategistConfig
+        from unittest.mock import MagicMock
+        agent = Agent()
+        agent.strategist.skills_registry = agent.skills
+        agent.skills.invoke = MagicMock(return_value={"ok": True, "result": {"rsi": 50.0}})
+        agent.bitget.get_ticker = MagicMock(return_value={"lastPr": "100.0"})
+        agent.bitget.get_portfolio_value_usdt = MagicMock(return_value=10.0)
+        decisions = agent.strategist.tick()
+        self.assertIsInstance(decisions, list)
+        print(f"  ✓ Strategist tick runs (returned {len(decisions)} decisions)")
+
 
 if __name__ == "__main__":
     print("\n" + "=" * 60)

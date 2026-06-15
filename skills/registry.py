@@ -149,6 +149,10 @@ class SkillsRegistry:
         self._register(Skill("mean_reversion_signal", "Signal: is price far from mean? (z-score)", "strategy", self._s_meanrev, {"symbol": "str", "lookback": "int"}))
         self._register(Skill("momentum_signal", "Signal: momentum strength (RSI, MACD, ROC)", "strategy", self._s_momentum, {"symbol": "str"}))
         self._register(Skill("kelly_criterion", "Optimal bet size from edge + odds (Kelly formula)", "strategy", self._s_kelly, {"edge": "float", "odds": "float"}))
+        self._register(Skill("advise_before_trade", "Analyze a proposed trade: chart, news, market structure, then advise. User can override.", "strategy", self._s_advise_before_trade, {"symbol": "str", "side": "str", "amount_usd": "float", "user_intent_reason": "str"}))
+        self._register(Skill("open_position_with_strategy", "Open a position with adaptive TP/SL: TP target, SL, and a thesis string. Strategist will close early if thesis decays.", "strategy", self._s_open_position_with_strategy, {"symbol": "str", "side": "str", "amount_usd": "float", "tp_pct": "float", "sl_pct": "float", "thesis": "str"}))
+        self._register(Skill("evaluate_open_positions", "Run the adaptive TP/SL decision matrix on all open positions. Returns a list of decisions (HOLD / CLOSE_TP / CLOSE_SL / CLOSE_EARLY_TP / CLOSE_CUT_LOSS / TRAIL_STOP).", "strategy", self._s_evaluate_open_positions, {}))
+        self._register(Skill("strategist_tick", "One pass of the autonomous strategist: evaluate exits, scan for entries, execute within risk. Returns the decisions made.", "agent_meta", self._s_strategist_tick, {}))
         self._register(Skill("strategy_backtest", "Quick backtest of a simple strategy on a symbol", "strategy", self._s_backtest, {"symbol": "str", "rule": "str", "days": "int"}))
 
         # Tier 7: Agent meta - 10
@@ -263,7 +267,8 @@ class SkillsRegistry:
             "risk_check_order", "mev_exposure_check", "sybil_score",
             "funding_rate_history", "rsi", "macd", "news_fetch",
             "edge_estimator", "thesis_writer", "memory_recall",
-            "normalize_symbol", "from_usd", "to_usd",
+            "normalize_symbol", "from_usd", "to_usd", "advise_before_trade",
+            "evaluate_open_positions", "strategist_tick",
         ]
         schemas = []
         for name in top_skill_names:
@@ -699,6 +704,327 @@ class SkillsRegistry:
 
     def _s_backtest(self, symbol: str, rule: str, days: int = 90) -> dict:
         return {"symbol": symbol, "rule": rule, "days": days, "trades": 0, "win_rate": 0, "pnl": 0, "note": "Stub (needs candle data + rule parser)"}
+
+    def _s_advise_before_trade(
+        self,
+        symbol: str,
+        side: str,
+        amount_usd: float,
+        user_intent_reason: str = "",
+    ) -> dict:
+        """Analyze a proposed trade BEFORE executing. Returns advisory with action/confidence/reasoning/risks.
+
+        Flow:
+        1. Pull current market state (price, 24h stats, funding rate, candles shape)
+        2. Pull recent memory of this symbol
+        3. Build a structured prompt for Qwen
+        4. Qwen returns: action (buy/sell/hold), confidence (0-1), reasoning, risks, alternatives
+        5. The caller compares user's `side` to advisory `action`:
+           - Match → proceed with risk check + execute
+           - Conflict, confidence >= 0.7 → return advisory, ask user to /force-buy or /abort
+           - Conflict, confidence < 0.7 → light nudge, proceed
+           - User persists (/force-buy) → execute anyway, log override
+        """
+        # Normalize symbol
+        if not symbol.endswith("USDT"):
+            symbol = symbol + "USDT"
+
+        # 1. Gather market state
+        market_state = {}
+        try:
+            ticker = self.bitget.get_ticker(symbol)
+            if isinstance(ticker, list) and ticker:
+                ticker = ticker[0]
+            market_state["price"] = float(ticker.get("lastPr", 0))
+            market_state["change_24h_pct"] = float(ticker.get("change24h", 0))
+            market_state["high_24h"] = float(ticker.get("high24h", 0))
+            market_state["low_24h"] = float(ticker.get("low24h", 0))
+            market_state["volume_24h"] = float(ticker.get("baseVolume", 0))
+        except Exception as e:
+            market_state["error"] = str(e)
+
+        # 2. Funding rate (if available)
+        try:
+            fr = self._s_funding_hist(symbol=symbol, days=1)
+            market_state["funding_rate_recent"] = fr
+        except Exception:
+            pass
+
+        # 3. Recent candles (1h, last 24 = 24 candles)
+        try:
+            candles = self._s_get_candles(symbol=symbol, granularity="1h", limit=24)
+            if isinstance(candles, list) and len(candles) >= 2:
+                first_close = float(candles[-1][4])
+                last_close = float(candles[0][4])
+                if first_close > 0:
+                    pct_24h = (last_close - first_close) / first_close * 100
+                    market_state["candle_trend_24h_pct"] = round(pct_24h, 2)
+        except Exception:
+            pass
+
+        # 4. Recent memory of this symbol
+        try:
+            memories = self.db.get_memories(limit=20)
+            sym_clean = symbol.replace("USDT", "")
+            relevant = [
+                m for m in memories
+                if sym_clean in m.get("content", "").upper() or symbol in m.get("content", "").upper()
+            ]
+            if relevant:
+                market_state["agent_history_with_symbol"] = [m["content"][:120] for m in relevant[:3]]
+        except Exception:
+            pass
+
+        # 5. Build the advisory prompt for Qwen
+        price = market_state.get("price", 0)
+        change_24h = market_state.get("change_24h_pct", 0)
+        high_24h = market_state.get("high_24h", 0)
+        low_24h = market_state.get("low_24h", 0)
+        vol_24h = market_state.get("volume_24h", 0)
+        candle_trend = market_state.get("candle_trend_24h_pct", "n/a")
+
+        prompt = (
+            f"You are advising a human trader on a proposed trade. Be HONEST, not a yes-man. "
+            f"If the trade is a bad idea, say so. If the user's intent conflicts with the chart/news, "
+            f"recommend the better action.\n\n"
+            f"PROPOSED TRADE: {side.upper()} ${amount_usd:.2f} of {symbol} at ${price:.4f}\n"
+            f"USER'S REASON: {user_intent_reason or '(none given)'}\n\n"
+            f"MARKET STATE:\n"
+            f"- Current price: ${price:.4f}\n"
+            f"- 24h change: {change_24h:+.2f}%\n"
+            f"- 24h high: ${high_24h:.4f} | 24h low: ${low_24h:.4f}\n"
+            f"- 24h volume: {vol_24h:,.2f}\n"
+            f"- 24h candle trend (from 1h candles): {candle_trend}%\n"
+        )
+        if "agent_history_with_symbol" in market_state:
+            prompt += f"- Agent's prior memory with {symbol}: {market_state['agent_history_with_symbol']}\n"
+
+        prompt += (
+            f"\nNEWS: (placeholder — news integration coming; reason from price action + chart structure)\n\n"
+            f"Respond in EXACTLY this format (no markdown, no preamble, just 5 lines):\n"
+            f"action: buy|sell|hold\n"
+            f"confidence: 0.0-1.0\n"
+            f"reasoning: one short paragraph (2-3 sentences max)\n"
+            f"risks: comma-separated list of 1-4 risks, or 'none'\n"
+            f"alternatives: comma-separated list of better plays, or 'none'\n"
+        )
+
+        advisory = {
+            "action": side,  # default to user's intent if Qwen fails
+            "confidence": 0.0,
+            "reasoning": "(Qwen advisory unavailable; defaulting to user's intent)",
+            "risks": [],
+            "alternatives": [],
+            "market_state": market_state,
+            "user_intent": side,
+            "conflicts": False,
+        }
+
+        try:
+            resp = self.qwen.chat(
+                messages=[
+                    {"role": "system", "content": (
+                        "You are a trading risk advisor. Your job is to flag risks, "
+                        "not to validate trades. If the user's intent looks like a bad idea "
+                        "(catching a falling knife, FOMO entry, ignored stop level), say so clearly. "
+                        "Be concise, no hype, no filler. Output exactly 5 lines in the specified format."
+                    )},
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=300,
+                temperature=0.3,  # lower temp for more deterministic advice
+            )
+            raw = resp["content"].strip()
+
+            # Parse the 5 lines
+            for line in raw.split("\n"):
+                lower = line.lower().strip()
+                if lower.startswith("action:"):
+                    advisory["action"] = line.split(":", 1)[1].strip().lower()
+                elif lower.startswith("confidence:"):
+                    try:
+                        conf = float(line.split(":", 1)[1].strip())
+                        advisory["confidence"] = max(0.0, min(1.0, conf))
+                    except (ValueError, IndexError):
+                        pass
+                elif lower.startswith("reasoning:"):
+                    advisory["reasoning"] = line.split(":", 1)[1].strip()
+                elif lower.startswith("risks:"):
+                    risk_text = line.split(":", 1)[1].strip()
+                    if risk_text.lower() != "none":
+                        advisory["risks"] = [r.strip() for r in risk_text.split(",") if r.strip()]
+                elif lower.startswith("alternatives:"):
+                    alt_text = line.split(":", 1)[1].strip()
+                    if alt_text.lower() != "none":
+                        advisory["alternatives"] = [a.strip() for a in alt_text.split(",") if a.strip()]
+
+            # Determine if Qwen's action conflicts with user's intent
+            user_action = side.lower()
+            advisor_action = advisory["action"].lower()
+            conflicts = user_action != advisor_action and advisor_action != "hold"
+            advisory["conflicts"] = conflicts
+            advisory["qwen_raw"] = raw
+
+        except Exception as e:
+            advisory["qwen_error"] = str(e)
+
+        return advisory
+
+    def _s_open_position_with_strategy(
+        self,
+        symbol: str,
+        side: str = "buy",
+        amount_usd: float = 1.0,
+        tp_pct: float = 10.0,
+        sl_pct: float = 5.0,
+        thesis: str = "",
+    ) -> dict:
+        """Open a position AND attach adaptive TP/SL rules + a thesis string.
+
+        The strategist runtime will close the position early if:
+        - The thesis decays (the original reason for entry is gone)
+        - The momentum that produced the gain is fading
+        - Or hold to TP/SL targets.
+
+        Returns: {ok, trade_id, order_id, ...}
+        """
+        # Normalize symbol
+        if not symbol.endswith("USDT"):
+            symbol = symbol + "USDT"
+
+        # Risk check
+        portfolio = self.bitget.get_portfolio_value_usdt()
+        open_positions = len(self.db.get_open_trades())
+        allowed, reason = self.risk.check_order(
+            symbol=symbol,
+            side=side,
+            size_usd=amount_usd,
+            portfolio_value_usd=portfolio,
+            open_positions_count=open_positions,
+        )
+        if not allowed:
+            return {"ok": False, "blocked": True, "reason": reason}
+
+        # Get price
+        ticker = self.bitget.get_ticker(symbol)
+        if isinstance(ticker, list) and ticker:
+            ticker = ticker[0]
+        price = float(ticker.get("lastPr", 0))
+        if price <= 0:
+            return {"ok": False, "error": f"Couldn't get price for {symbol}"}
+
+        # Place the order
+        try:
+            order = self.bitget.place_spot_order(
+                symbol=symbol,
+                side=side,
+                order_type="market",
+                quote_size=str(amount_usd) if side == "buy" else None,
+            )
+            order_id = order.get("orderId", "")
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+        size = amount_usd / price if price > 0 else 0
+        trade_id = self.db.record_trade(
+            symbol=symbol,
+            side=side,
+            order_type="spot",
+            size=size,
+            price=price,
+            quote_usd=amount_usd,
+            order_id=order_id,
+            reason=f"Adaptive position. TP={tp_pct}%, SL={sl_pct}%. Thesis: {thesis}",
+            skills_used=["open_position_with_strategy", "place_spot_order", "get_ticker", "risk_check"],
+            confidence=0.7,
+            tp_pct=tp_pct,
+            sl_pct=sl_pct,
+            thesis=thesis,
+        )
+
+        # Memory
+        self.db.add_memory(
+            "observation",
+            f"Opened adaptive position: {side.upper()} ${amount_usd:.2f} {symbol} @ ${price:.4f}. "
+            f"TP={tp_pct}%, SL={sl_pct}%, thesis='{thesis[:100]}'",
+            tags=[side, symbol, "adaptive_position", "trade"],
+            importance=4,
+        )
+
+        return {
+            "ok": True,
+            "trade_id": trade_id,
+            "order_id": order_id,
+            "symbol": symbol,
+            "side": side,
+            "amount_usd": amount_usd,
+            "entry_price": price,
+            "size": size,
+            "tp_pct": tp_pct,
+            "sl_pct": sl_pct,
+            "thesis": thesis,
+        }
+
+    def _s_evaluate_open_positions(self) -> dict:
+        """Run the adaptive TP/SL decision matrix on all open positions.
+
+        Returns a list of decisions. The strategist runtime calls this every tick.
+        Useful for /positions and /skill evaluate_open_positions.
+        """
+        from agent.strategist import Strategist, StrategistConfig
+        # Lazy import to avoid circular deps
+        try:
+            cfg = StrategistConfig()
+            st = Strategist(
+                bitget=self.bitget, qwen=self.qwen, db=self.db,
+                risk=self.risk, skills_registry=self, config=cfg,
+            )
+            open_trades = self.db.get_open_trades()
+            decisions = []
+            for trade in open_trades:
+                d = st._evaluate_position(trade)
+                if d:
+                    decisions.append({
+                        "trade_id": d.trade_id,
+                        "symbol": d.symbol,
+                        "decision": d.decision,
+                        "reasoning": d.reasoning,
+                        "metrics": d.metrics,
+                    })
+            return {"ok": True, "n_open": len(open_trades), "decisions": decisions}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def _s_strategist_tick(self) -> dict:
+        """One pass of the autonomous strategist (evaluate + scan, but no auto-execute).
+
+        Returns the decisions that WOULD be made. Use this for dry-runs.
+        For real execution, use /strategist start (background loop).
+        """
+        from agent.strategist import Strategist, StrategistConfig
+        try:
+            cfg = StrategistConfig()
+            st = Strategist(
+                bitget=self.bitget, qwen=self.qwen, db=self.db,
+                risk=self.risk, skills_registry=self, config=cfg,
+            )
+            decisions = st.tick()
+            return {
+                "ok": True,
+                "n_decisions": len(decisions),
+                "decisions": [
+                    {
+                        "decision": d.decision,
+                        "symbol": d.symbol,
+                        "trade_id": d.trade_id,
+                        "reasoning": d.reasoning,
+                        "metrics": d.metrics,
+                    }
+                    for d in decisions
+                ],
+            }
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
 
     # =========================================================================
     # Tier 7: Agent meta

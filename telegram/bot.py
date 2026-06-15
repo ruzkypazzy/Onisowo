@@ -35,8 +35,10 @@ HELP_TEXT = (
     "*/status* — portfolio + balance\n"
     "*/balance* — USDT balance only\n"
     "*/price SYMBOL* — current price\n"
-    "*/buy SYMBOL USDT* — buy $X of SYMBOL\n"
-    "*/sell SYMBOL USDT* — sell $X of SYMBOL\n\n"
+    "*/buy SYMBOL USDT* — buy $X of SYMBOL (with advisor)\n"
+    "*/sell SYMBOL USDT* — sell $X of SYMBOL (with advisor)\n"
+    "*/force_buy* / */force_sell* — override a held advisory\n"
+    "*/abort* — cancel a held advisory\n\n"
     "*/journal* — recent trade journal\n"
     "*/review* — 7-day review\n"
     "*/reflect* — recursive self-improvement\n"
@@ -47,7 +49,11 @@ HELP_TEXT = (
     "*/risk* — risk engine state\n"
     "*/kill REASON* — activate kill switch\n"
     "*/release* — release kill switch\n"
-    "*/settings* — adjust limits\n"
+    "*/settings* — adjust limits\n\n"
+    "🤖 *Autonomous:*\n"
+    "*/strategist start|stop|status|tick* — autonomous trading loop\n"
+    "*/strategy* — show strategy rules (watchlist, TP/SL, auto modes)\n"
+    "*/positions* — open positions with adaptive TP/SL signals\n"
 )
 
 
@@ -72,6 +78,14 @@ def parse_command_args(text: str) -> tuple[str, dict]:
             return (cmd, {"symbol": symbol, "amount_usd": amount})
         return (cmd, {"symbol": rest.strip(), "amount_usd": 0, "extra": rest.split()})
 
+    if cmd in ("force_buy", "force_sell"):
+        # /force_buy SOL 100 — uses the cached pending advisory's trade,
+        # args are optional (bot can take them from the pending cache).
+        m = re.match(r"(\S+)\s+(\d+(?:\.\d+)?)", rest)
+        if m:
+            return (cmd, {"symbol": m.group(1).upper(), "amount_usd": float(m.group(2))})
+        return (cmd, {})
+
     if cmd == "price":
         return (cmd, {"symbol": rest.strip().upper() or "BTCUSDT"})
 
@@ -84,8 +98,12 @@ def parse_command_args(text: str) -> tuple[str, dict]:
 
     if cmd in ("start", "help", "about", "status", "balance", "skills", "journal",
                "review", "reflect", "memory", "risk", "release", "settings", "pnl",
-               "llm", "llms", "time"):
+               "llm", "llms", "time", "abort", "strategy", "positions"):
         return (cmd, {})
+
+    if cmd == "strategist":
+        # /strategist [start|stop|status|tick] — the agent unpacks the subcommand from user_message
+        return (cmd, {"sub": rest.strip().lower().split()[0] if rest.strip() else ""})
 
     return ("ask", {"text": text})
 

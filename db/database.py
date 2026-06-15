@@ -96,6 +96,18 @@ class Database:
         """Create all tables if they don't exist."""
         with self._conn() as conn:
             conn.executescript(self.SCHEMA)
+            # Migrations: add strategist columns to trades (safe to run multiple times)
+            for stmt in [
+                "ALTER TABLE trades ADD COLUMN tp_pct REAL DEFAULT 10.0",
+                "ALTER TABLE trades ADD COLUMN sl_pct REAL DEFAULT 5.0",
+                "ALTER TABLE trades ADD COLUMN thesis TEXT",
+                "ALTER TABLE trades ADD COLUMN entry_signals TEXT",
+                "ALTER TABLE trades ADD COLUMN early_close_count INTEGER DEFAULT 0",
+            ]:
+                try:
+                    conn.execute(stmt)
+                except Exception:
+                    pass  # column already exists
             conn.commit()
 
     @contextmanager
@@ -127,13 +139,18 @@ class Database:
         reason: str = "",
         skills_used: list = None,
         confidence: float = 0.0,
+        tp_pct: float = 10.0,
+        sl_pct: float = 5.0,
+        thesis: str = "",
+        entry_signals: dict = None,
     ) -> int:
         """Record a trade. Returns the trade ID."""
         with self._conn() as conn:
             cur = conn.execute(
                 """INSERT INTO trades (symbol, side, order_type, size, price, quote_usd,
-                                       order_id, reason, skills_used, confidence, status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open')""",
+                                       order_id, reason, skills_used, confidence, status,
+                                       tp_pct, sl_pct, thesis, entry_signals)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)""",
                 (
                     symbol,
                     side,
@@ -145,6 +162,10 @@ class Database:
                     reason,
                     json.dumps(skills_used or []),
                     confidence,
+                    tp_pct,
+                    sl_pct,
+                    thesis,
+                    json.dumps(entry_signals or {}),
                 ),
             )
             conn.commit()
@@ -162,6 +183,15 @@ class Database:
                        closed_at = ?
                    WHERE id = ?""",
                 (exit_price, pnl_usd, pnl_pct, datetime.utcnow().isoformat(), trade_id),
+            )
+            conn.commit()
+
+    def increment_early_close(self, trade_id: int):
+        """Bump the early_close_count for a trade (used by strategist adaptive TP)."""
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE trades SET early_close_count = early_close_count + 1 WHERE id = ?",
+                (trade_id,),
             )
             conn.commit()
 

@@ -1,0 +1,24 @@
+# Oniṣòwò — Python dependencies
+# Python 3.10+
+
+# LLM (Qwen via OpenAI-compatible API)
+openai>=1.30.0
+
+# Telegram bot
+python-telegram-bot>=21.0
+
+# Bitget API + signing
+requests>=2.31.0
+pycryptodome>=3.19.0  # for HMAC-SHA256 signing
+
+# Database
+sqlalchemy>=2.0.0
+
+# Config
+python-dotenv>=1.0.0
+pydantic>=2.5.0
+
+# Utilities
+httpx>=0.26.0
+tenacity>=8.2.0
+python-dateutil>=2.8.0

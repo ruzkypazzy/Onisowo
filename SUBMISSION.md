@@ -1,0 +1,81 @@
+# Bitget AI Base Camp Hackathon S1 — Submission
+
+**Project**: Oniṣòwò (oh-nee-SHAW-woh)
+**Track**: 1 — Trading Agent
+**Submitted by**: ruzkypazzy (Bitget UID 7781181263)
+**Demo**: https://t.me/OnisowoBot
+**Repo**: https://github.com/ruzkypazzy/Onisowo
+**Date**: 2026-06-15
+
+---
+
+## 200-word description (submission text)
+
+**Oniṣòwò** is a self-hostable, open-source AI trading agent that runs in your Telegram. 100+ unique skills — MEV-aware execution, sybil counterparty scoring, recursive self-improvement, and 97 more — wrapped in a 5-command setup.
+
+**Problem.** Existing trading bots are either black-box SaaS (custody your keys, trust their code) or thin Claude wrappers with no trading depth. No open-source agent combines MEV awareness, sybil defense, and a memory that learns from every trade.
+
+**Strategy loop.** Perceive → Decide → Execute → Reflect. Oniṣòwò gathers market + onchain context, asks Qwen 3.6-plus what to do, runs the chosen skills, places the order via Bitget, then writes a memory entry for next time.
+
+**Differentiators.**
+- **100+ skills** organized in 9 tiers (core trading, risk, onchain intel, market intel, sentiment, strategy, agent meta, user-facing, utilities)
+- **MEV-aware execution** — checks sandwich-attack risk before every swap
+- **Sybil counterparty scoring** — refuses to enter positions with 60%+ sybil clusters
+- **Recursive self-improvement** — reviews last 7 days of trades, writes a new rule to memory every Sunday
+- **Self-hostable** — your keys never leave your machine, no central DB, no custody
+
+**Built with**: Bitget Agent Hub (spot + futures APIs, 58 tools), Qwen 3.6-plus (LLM), Telegram (surface), SQLite (memory), Python 3.10+.
+
+**Hackathon tracks** (bitget-ai.gitbook.io/base-camp-hackathon-s1-en): Track 1 — Trading Agent. Submission: demo link (Telegram bot, public, anyone can message) + this 200-word writeup. Code: github.com/ruzkypazzy/Onisowo (MIT).
+
+---
+
+## How to test the demo
+
+1. Open Telegram
+2. Search for `@OnisowoBot` (or click https://t.me/OnisowoBot)
+3. Send `/start`
+4. Try `/status`, `/price BTCUSDT`, `/buy SOL 100`, `/skills`, `/journal`, `/reflect`
+
+The bot is in **demo mode** for safety — it reads market data but won't place real trades. For live trading, you self-host your own instance (see README.md).
+
+## How to self-host (the real differentiator)
+
+```bash
+git clone https://github.com/ruzkypazzy/Onisowo.git
+cd Onisowo
+bash init.sh   # creates venv, installs deps, prompts for .env
+nano .env      # fill in 5 env vars
+python main.py # bot is live on YOUR machine
+```
+
+3 minutes. Your keys. Your VPS. Your bot.
+
+## The 100+ skills (counted, listed in /skills command)
+
+| Tier | Count | Examples |
+|---|---:|---|
+| Core trading (Bitget API) | 15 | place_spot_order, get_ticker, get_orderbook, place_futures_order |
+| Risk & safety | 12 | risk_check_order, kill_switch, position_size_calc, exposure_check |
+| Onchain intelligence | 20 | mev_exposure_check, sybil_score, contract_safety, holder_concentration |
+| Market intelligence | 15 | funding_rate, oi_delta, rsi, macd, bollinger_bands |
+| Sentiment & news | 10 | news_fetch, social_sentiment, narrative_detector, x_mentions |
+| Strategy & decision | 10 | edge_estimator, thesis_writer, kelly_criterion, backtest |
+| Agent meta (recursive improvement) | 10 | recursive_improvement, journal_writer, memory_recall, explain_decision |
+| User-facing | 5 | send_alert, ask_approval, format_pnl, send_chart |
+| Utilities | 8 | normalize_symbol, retry_with_backoff, to_usd, from_usd |
+| **Total** | **105** | |
+
+Run `/skills` in the bot to see all 105 with descriptions.
+
+## Why I built this
+
+I shipped 6 onchain skills for the Pharos Agent Center Skill Builder Campaign (MEV Exposure Reporter, Quorum Forecaster, etc.). Those are tools — they analyze, they don't act. **Oniṣòwò is the agent that uses those tools + 99 more to actually trade.**
+
+The differentiators (MEV-aware, sybil-scored, recursive self-improvement) are not new ideas — they're the same 3 from my Pharos campaign, now wired into an actual trader. The submission shows the *integration*, not just the analysis.
+
+## Open source
+
+MIT licensed. https://github.com/ruzkypazzy/Onisowo
+
+Built in 16 days during the Bitget AI Base Camp Hackathon S1 (May 27 – June 30, 2026).

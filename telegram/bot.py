@@ -53,7 +53,11 @@ HELP_TEXT = (
     "🤖 *Autonomous:*\n"
     "*/strategist start|stop|status|tick* — autonomous trading loop\n"
     "*/strategy* — show strategy rules (watchlist, TP/SL, auto modes)\n"
-    "*/positions* — open positions with adaptive TP/SL signals\n"
+    "*/positions* — open positions with adaptive TP/SL signals\n\n"
+    "🎯 *3 trading modes:*\n"
+    "• *Manual:* `/buy SYMBOL USDT` — you pick, bot executes\n"
+    "• *Semi:* `/analyze SYMBOL USDT` → `/proceed` — bot analyzes, you confirm\n"
+    "• *Autonomous:* `/autotrade USDT` — bot scans, picks, executes (with safety net)\n"
 )
 
 
@@ -98,7 +102,8 @@ def parse_command_args(text: str) -> tuple[str, dict]:
 
     if cmd in ("start", "help", "about", "status", "balance", "skills", "journal",
                "review", "reflect", "memory", "risk", "release", "settings", "pnl",
-               "llm", "llms", "time", "abort", "strategy", "positions"):
+               "llm", "llms", "time", "abort", "strategy", "positions",
+               "analyze", "autotrade", "proceed"):
         return (cmd, {})
 
     if cmd == "strategist":

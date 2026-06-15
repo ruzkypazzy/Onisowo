@@ -126,6 +126,9 @@ class SkillsRegistry:
         self._register(Skill("macd", "MACD indicator (12/26/9)", "market_intel", self._s_macd, {"symbol": "str"}))
         self._register(Skill("ema_cross", "EMA crossover signal (e.g., 9/21 cross)", "market_intel", self._s_ema_cross, {"symbol": "str", "fast": "int", "slow": "int"}))
         self._register(Skill("bollinger_bands", "Bollinger Bands (20, 2)", "market_intel", self._s_bollinger, {"symbol": "str", "period": "int"}))
+        self._register(Skill("atr", "Average True Range (volatility) over N periods", "market_intel", self._s_atr, {"symbol": "str", "period": "int"}))
+        self._register(Skill("adx", "Average Directional Index (trend strength)", "market_intel", self._s_adx, {"symbol": "str", "period": "int"}))
+        self._register(Skill("support_resistance_levels", "Find support/resistance from recent swing highs/lows", "market_intel", self._s_support_resistance, {"symbol": "str", "lookback": "int"}))
 
         # Tier 5: Sentiment & news - 10
         self._register(Skill("news_fetch", "Fetch recent news for a token or topic", "sentiment", self._s_news, {"query": "str", "limit": "int"}))
@@ -151,6 +154,11 @@ class SkillsRegistry:
         self._register(Skill("kelly_criterion", "Optimal bet size from edge + odds (Kelly formula)", "strategy", self._s_kelly, {"edge": "float", "odds": "float"}))
         self._register(Skill("advise_before_trade", "Analyze a proposed trade: chart, news, market structure, then advise. User can override.", "strategy", self._s_advise_before_trade, {"symbol": "str", "side": "str", "amount_usd": "float", "user_intent_reason": "str"}))
         self._register(Skill("open_position_with_strategy", "Open a position with adaptive TP/SL: TP target, SL, and a thesis string. Strategist will close early if thesis decays.", "strategy", self._s_open_position_with_strategy, {"symbol": "str", "side": "str", "amount_usd": "float", "tp_pct": "float", "sl_pct": "float", "thesis": "str"}))
+        self._register(Skill("suggest_tp_sl", "Bot's discretion: suggest TP/SL based on ATR, ADX, and support/resistance. Rejects trades with R:R < 1.5.", "strategy", self._s_suggest_tp_sl, {"symbol": "str", "side": "str"}))
+        self._register(Skill("universe_scan", "Pull top USDT pairs by 24h volume, filter stables/leveraged/illiquid", "market_intel", self._s_universe_scan, {"limit": "int"}))
+        self._register(Skill("score_symbol", "Multi-signal 0-1 score for a single symbol (RSI, MACD, funding, MEV, ATR, ADX, etc.)", "strategy", self._s_score_symbol, {"symbol": "str"}))
+        self._register(Skill("analyze_symbol", "Deep analysis of a single symbol: signals + Qwen thesis + suggested TP/SL. For semi-autonomous mode.", "strategy", self._s_analyze_symbol, {"symbol": "str", "amount_usd": "float", "side": "str"}))
+        self._register(Skill("find_best_trade", "Autonomous mode: scan universe, score top candidates, ask Qwen for final pick + suggested TP/SL", "strategy", self._s_find_best_trade, {"amount_usd": "float", "max_candidates": "int"}))
         self._register(Skill("evaluate_open_positions", "Run the adaptive TP/SL decision matrix on all open positions. Returns a list of decisions (HOLD / CLOSE_TP / CLOSE_SL / CLOSE_EARLY_TP / CLOSE_CUT_LOSS / TRAIL_STOP).", "strategy", self._s_evaluate_open_positions, {}))
         self._register(Skill("strategist_tick", "One pass of the autonomous strategist: evaluate exits, scan for entries, execute within risk. Returns the decisions made.", "agent_meta", self._s_strategist_tick, {}))
         self._register(Skill("strategy_backtest", "Quick backtest of a simple strategy on a symbol", "strategy", self._s_backtest, {"symbol": "str", "rule": "str", "days": "int"}))
@@ -269,6 +277,8 @@ class SkillsRegistry:
             "edge_estimator", "thesis_writer", "memory_recall",
             "normalize_symbol", "from_usd", "to_usd", "advise_before_trade",
             "evaluate_open_positions", "strategist_tick",
+            "suggest_tp_sl", "score_symbol", "analyze_symbol", "find_best_trade",
+            "atr", "adx", "support_resistance_levels",
         ]
         schemas = []
         for name in top_skill_names:
@@ -615,17 +625,342 @@ class SkillsRegistry:
         return {"symbol": symbol, "volatility_annualized": 0, "note": "Stub"}
 
     def _s_rsi(self, symbol: str, period: int = 14) -> dict:
-        # Simplified: would need to fetch candles and calculate
-        return {"symbol": symbol, "rsi": 50, "note": "Stub (needs candle data)"}
+        """Compute RSI(period) from the last `period * 5` 1h candles. Returns 0-100."""
+        if not symbol.endswith("USDT"):
+            symbol = symbol + "USDT"
+        try:
+            candles = self._s_get_candles(symbol=symbol, granularity="1h", limit=max(period * 5, 50))
+            if not candles or len(candles) < period + 1:
+                return {"symbol": symbol, "rsi": 50, "note": "Insufficient candle data"}
+            # Bitget candle format: [ts, open, high, low, close, volume]
+            closes = [float(c[4]) for c in candles]
+            closes = closes[::-1]  # oldest first
+            gains, losses = [], []
+            for i in range(1, len(closes)):
+                delta = closes[i] - closes[i-1]
+                if delta > 0:
+                    gains.append(delta)
+                    losses.append(0)
+                else:
+                    gains.append(0)
+                    losses.append(-delta)
+            # Use last `period` periods
+            gains = gains[-period:]
+            losses = losses[-period:]
+            avg_gain = sum(gains) / period
+            avg_loss = sum(losses) / period
+            if avg_loss == 0:
+                rsi = 100.0
+            else:
+                rs = avg_gain / avg_loss
+                rsi = 100 - (100 / (1 + rs))
+            return {"symbol": symbol, "rsi": round(rsi, 2), "period": period, "interpretation": "oversold" if rsi < 30 else "overbought" if rsi > 70 else "neutral"}
+        except Exception as e:
+            return {"symbol": symbol, "rsi": 50, "note": f"RSI calc failed: {e}"}
 
     def _s_macd(self, symbol: str) -> dict:
-        return {"symbol": symbol, "macd": 0, "signal": 0, "histogram": 0, "note": "Stub"}
+        """MACD(12, 26, 9) from 1h candles."""
+        if not symbol.endswith("USDT"):
+            symbol = symbol + "USDT"
+        try:
+            candles = self._s_get_candles(symbol=symbol, granularity="1h", limit=100)
+            if not candles or len(candles) < 35:
+                return {"symbol": symbol, "macd": 0, "signal": 0, "histogram": 0, "note": "Insufficient data"}
+            closes = [float(c[4]) for c in candles][::-1]
+
+            def ema(data, period):
+                k = 2 / (period + 1)
+                e = data[0]
+                out = [e]
+                for x in data[1:]:
+                    e = x * k + e * (1 - k)
+                    out.append(e)
+                return out
+
+            ema12 = ema(closes, 12)
+            ema26 = ema(closes, 26)
+            macd_line = [a - b for a, b in zip(ema12[-len(ema26):], ema26)]
+            signal_line = ema(macd_line, 9)
+            histogram = macd_line[-1] - signal_line[-1]
+            return {
+                "symbol": symbol,
+                "macd": round(macd_line[-1], 6),
+                "signal": round(signal_line[-1], 6),
+                "histogram": round(histogram, 6),
+                "trend": "bullish" if histogram > 0 else "bearish",
+            }
+        except Exception as e:
+            return {"symbol": symbol, "macd": 0, "signal": 0, "histogram": 0, "note": f"MACD calc failed: {e}"}
 
     def _s_ema_cross(self, symbol: str, fast: int = 9, slow: int = 21) -> dict:
-        return {"symbol": symbol, "fast": fast, "slow": slow, "signal": "neutral", "note": "Stub"}
+        """Detect EMA(fast) crossing above/below EMA(slow) on 1h candles."""
+        if not symbol.endswith("USDT"):
+            symbol = symbol + "USDT"
+        try:
+            candles = self._s_get_candles(symbol=symbol, granularity="1h", limit=100)
+            if not candles or len(candles) < slow + 2:
+                return {"symbol": symbol, "fast": fast, "slow": slow, "signal": "neutral", "note": "Insufficient data"}
+            closes = [float(c[4]) for c in candles][::-1]
+
+            def ema(data, period):
+                k = 2 / (period + 1)
+                e = data[0]
+                for x in data[1:]:
+                    e = x * k + e * (1 - k)
+                return e
+
+            ema_fast_now = ema(closes, fast)
+            ema_slow_now = ema(closes, slow)
+            ema_fast_prev = ema(closes[:-1], fast)
+            ema_slow_prev = ema(closes[:-1], slow)
+
+            cross = "bullish_cross" if ema_fast_prev <= ema_slow_prev and ema_fast_now > ema_slow_now else "bearish_cross" if ema_fast_prev >= ema_slow_prev and ema_fast_now < ema_slow_now else "neutral"
+            return {"symbol": symbol, "fast": fast, "slow": slow, "signal": cross, "ema_fast": round(ema_fast_now, 4), "ema_slow": round(ema_slow_now, 4)}
+        except Exception as e:
+            return {"symbol": symbol, "fast": fast, "slow": slow, "signal": "neutral", "note": f"EMA cross calc failed: {e}"}
 
     def _s_bollinger(self, symbol: str, period: int = 20) -> dict:
-        return {"symbol": symbol, "upper": 0, "middle": 0, "lower": 0, "note": "Stub"}
+        """Bollinger Bands(20, 2) from 1h candles."""
+        if not symbol.endswith("USDT"):
+            symbol = symbol + "USDT"
+        try:
+            candles = self._s_get_candles(symbol=symbol, granularity="1h", limit=max(period * 2, 50))
+            if not candles or len(candles) < period:
+                return {"symbol": symbol, "upper": 0, "middle": 0, "lower": 0, "note": "Insufficient data"}
+            closes = [float(c[4]) for c in candles][::-1]
+            recent = closes[-period:]
+            middle = sum(recent) / period
+            variance = sum((c - middle) ** 2 for c in recent) / period
+            std = variance ** 0.5
+            upper = middle + 2 * std
+            lower = middle - 2 * std
+            last = closes[-1]
+            return {
+                "symbol": symbol, "period": period,
+                "upper": round(upper, 4), "middle": round(middle, 4), "lower": round(lower, 4),
+                "last": round(last, 4),
+                "position": "above_upper" if last > upper else "below_lower" if last < lower else "within_bands",
+            }
+        except Exception as e:
+            return {"symbol": symbol, "upper": 0, "middle": 0, "lower": 0, "note": f"Bollinger calc failed: {e}"}
+
+    def _s_atr(self, symbol: str, period: int = 14) -> dict:
+        """Average True Range (volatility measure) over `period` 1h candles."""
+        if not symbol.endswith("USDT"):
+            symbol = symbol + "USDT"
+        try:
+            candles = self._s_get_candles(symbol=symbol, granularity="1h", limit=max(period * 3, 50))
+            if not candles or len(candles) < period + 1:
+                return {"symbol": symbol, "atr": 0, "atr_pct": 0, "note": "Insufficient data"}
+            # Bitget: [ts, open, high, low, close, volume]
+            candles = candles[::-1]  # oldest first
+            trs = []
+            for i in range(1, len(candles)):
+                high = float(candles[i][2])
+                low = float(candles[i][3])
+                prev_close = float(candles[i-1][4])
+                tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
+                trs.append(tr)
+            trs = trs[-period:]
+            atr = sum(trs) / period
+            last_close = float(candles[-1][4])
+            atr_pct = (atr / last_close * 100) if last_close > 0 else 0
+            return {
+                "symbol": symbol, "period": period,
+                "atr": round(atr, 6),
+                "atr_pct": round(atr_pct, 3),
+                "last_close": round(last_close, 4),
+                "interpretation": "high_vol" if atr_pct > 5 else "normal_vol" if atr_pct > 1.5 else "low_vol",
+            }
+        except Exception as e:
+            return {"symbol": symbol, "atr": 0, "atr_pct": 0, "note": f"ATR calc failed: {e}"}
+
+    def _s_adx(self, symbol: str, period: int = 14) -> dict:
+        """Average Directional Index (trend strength) over `period` 1h candles.
+        ADX > 25 = trending, < 20 = choppy/ranging."""
+        if not symbol.endswith("USDT"):
+            symbol = symbol + "USDT"
+        try:
+            candles = self._s_get_candles(symbol=symbol, granularity="1h", limit=max(period * 3, 50))
+            if not candles or len(candles) < period + 1:
+                return {"symbol": symbol, "adx": 0, "note": "Insufficient data"}
+            candles = candles[::-1]
+            highs = [float(c[2]) for c in candles]
+            lows = [float(c[3]) for c in candles]
+            closes = [float(c[4]) for c in candles]
+
+            plus_dm, minus_dm, tr = [], [], []
+            for i in range(1, len(candles)):
+                up = highs[i] - highs[i-1]
+                down = lows[i-1] - lows[i]
+                plus_dm.append(up if up > down and up > 0 else 0)
+                minus_dm.append(down if down > up and down > 0 else 0)
+                tr_val = max(highs[i] - lows[i], abs(highs[i] - closes[i-1]), abs(lows[i] - closes[i-1]))
+                tr.append(tr_val)
+
+            def smooth(data):
+                smoothed = [sum(data[:period]) / period]
+                for v in data[period:]:
+                    smoothed.append((smoothed[-1] * (period - 1) + v) / period)
+                return smoothed
+
+            tr_s = smooth(tr)
+            plus_dm_s = smooth(plus_dm)
+            minus_dm_s = smooth(minus_dm)
+            plus_di = [100 * dm / t if t > 0 else 0 for dm, t in zip(plus_dm_s, tr_s)]
+            minus_di = [100 * dm / t if t > 0 else 0 for dm, t in zip(minus_dm_s, tr_s)]
+            dx = [100 * abs(p - m) / (p + m) if (p + m) > 0 else 0 for p, m in zip(plus_di, minus_di)]
+            adx = sum(dx[-period:]) / period
+            return {
+                "symbol": symbol, "period": period, "adx": round(adx, 2),
+                "interpretation": "strong_trend" if adx > 25 else "weak_trend" if adx > 20 else "choppy",
+            }
+        except Exception as e:
+            return {"symbol": symbol, "adx": 0, "note": f"ADX calc failed: {e}"}
+
+    def _s_support_resistance(self, symbol: str, lookback: int = 100) -> dict:
+        """Find support and resistance levels from recent swing highs/lows."""
+        if not symbol.endswith("USDT"):
+            symbol = symbol + "USDT"
+        try:
+            candles = self._s_get_candles(symbol=symbol, granularity="1h", limit=lookback)
+            if not candles or len(candles) < 20:
+                return {"symbol": symbol, "resistance": 0, "support": 0, "note": "Insufficient data"}
+            # Bitget: [ts, open, high, low, close, volume]
+            candles = candles[::-1]
+            highs = [float(c[2]) for c in candles]
+            lows = [float(c[3]) for c in candles]
+            last_close = float(candles[-1][4])
+
+            # Find swing highs (local maxima) and swing lows (local minima) over window of 5
+            window = 5
+            swing_highs = []
+            swing_lows = []
+            for i in range(window, len(candles) - window):
+                if highs[i] == max(highs[i-window:i+window+1]):
+                    swing_highs.append(highs[i])
+                if lows[i] == min(lows[i-window:i+window+1]):
+                    swing_lows.append(lows[i])
+
+            # Pick the nearest resistance above current price and nearest support below
+            resistances_above = sorted([h for h in swing_highs if h > last_close])
+            supports_below = sorted([s for s in swing_lows if s < last_close], reverse=True)
+
+            resistance = resistances_above[0] if resistances_above else max(highs)
+            support = supports_below[0] if supports_below else min(lows)
+            return {
+                "symbol": symbol, "lookback": lookback,
+                "resistance": round(resistance, 4),
+                "support": round(support, 4),
+                "last_close": round(last_close, 4),
+                "n_resistance_levels": len(resistances_above),
+                "n_support_levels": len(supports_below),
+            }
+        except Exception as e:
+            return {"symbol": symbol, "resistance": 0, "support": 0, "note": f"S/R calc failed: {e}"}
+
+    def _s_suggest_tp_sl(self, symbol: str, side: str = "buy") -> dict:
+        """Bot's discretion: suggest TP and SL levels based on ATR, ADX, and S/R.
+
+        Returns: {tp_price, sl_price, tp_pct, sl_pct, r_r_ratio, method, reasoning}
+
+        Strategy:
+        - If clear S/R levels exist, use them (TP = resistance, SL = support)
+        - Otherwise use ATR-based multiples (trending = wider, choppy = tighter)
+        - Reject if R:R < 1.5 (no edge)
+        """
+        if not symbol.endswith("USDT"):
+            symbol = symbol + "USDT"
+        try:
+            atr = self._s_atr(symbol=symbol, period=14)
+            adx = self._s_adx(symbol=symbol, period=14)
+            sr = self._s_support_resistance(symbol=symbol, lookback=100)
+
+            atr_val = float(atr.get("atr", 0))
+            adx_val = float(adx.get("adx", 0))
+            last_close = float(sr.get("last_close", 0) or atr.get("last_close", 0))
+            resistance = float(sr.get("resistance", 0))
+            support = float(sr.get("support", 0))
+
+            if last_close <= 0 or atr_val <= 0:
+                return {"ok": False, "error": "Could not derive price/ATR"}
+
+            # Choose TP/SL method
+            method = "support_resistance"
+            reasoning_parts = []
+
+            # If resistance is "close enough" (within 3x ATR) and support is also within 3x ATR
+            use_sr = (resistance > last_close and (resistance - last_close) < atr_val * 3
+                      and support < last_close and (last_close - support) < atr_val * 3)
+
+            if use_sr:
+                tp_price = resistance
+                sl_price = support
+                reasoning_parts.append(f"TP at resistance ${resistance:.4f} (S/R-based)")
+                reasoning_parts.append(f"SL at support ${sl_price:.4f} (S/R-based)")
+            else:
+                # ATR-based with ADX adjustment
+                method = "atr_adjusted"
+                if adx_val > 25:
+                    # Strong trend: wider TP, tighter SL (let it run)
+                    tp_mult = 3.0
+                    sl_mult = 1.5
+                    reasoning_parts.append(f"Trending (ADX {adx_val:.1f}): TP at {tp_mult}×ATR, SL at {sl_mult}×ATR")
+                elif adx_val > 20:
+                    # Moderate trend: balanced
+                    tp_mult = 2.0
+                    sl_mult = 1.0
+                    reasoning_parts.append(f"Weak trend (ADX {adx_val:.1f}): TP at {tp_mult}×ATR, SL at {sl_mult}×ATR")
+                else:
+                    # Choppy: tight TP
+                    tp_mult = 1.5
+                    sl_mult = 1.0
+                    reasoning_parts.append(f"Choppy (ADX {adx_val:.1f}): TP at {tp_mult}×ATR, SL at {sl_mult}×ATR")
+
+                if side == "buy":
+                    tp_price = last_close + tp_mult * atr_val
+                    sl_price = last_close - sl_mult * atr_val
+                else:
+                    tp_price = last_close - tp_mult * atr_val
+                    sl_price = last_close + sl_mult * atr_val
+                reasoning_parts.append(f"TP ${tp_price:.4f}, SL ${sl_price:.4f}")
+
+            # Compute pct
+            if side == "buy":
+                tp_pct = (tp_price - last_close) / last_close * 100
+                sl_pct = (last_close - sl_price) / last_close * 100
+            else:
+                tp_pct = (last_close - tp_price) / last_close * 100
+                sl_pct = (sl_price - last_close) / last_close * 100
+
+            # R:R ratio
+            r_r = tp_pct / sl_pct if sl_pct > 0 else 0
+
+            reasoning_parts.insert(0, f"Bot discretion: {method} method")
+            reasoning_parts.append(f"ATR ${atr_val:.4f} ({atr.get('atr_pct', 0):.2f}%), ADX {adx_val:.1f}")
+            reasoning_parts.append(f"R:R = {r_r:.2f}:1" + (" \u2705" if r_r >= 1.5 else " \u274c (below 1.5 threshold)"))
+
+            return {
+                "ok": True,
+                "symbol": symbol,
+                "side": side,
+                "entry_price": last_close,
+                "tp_price": round(tp_price, 4),
+                "sl_price": round(sl_price, 4),
+                "tp_pct": round(tp_pct, 2),
+                "sl_pct": round(sl_pct, 2),
+                "r_r_ratio": round(r_r, 2),
+                "method": method,
+                "atr": atr_val,
+                "atr_pct": atr.get("atr_pct", 0),
+                "adx": adx_val,
+                "resistance": resistance,
+                "support": support,
+                "reasoning": " | ".join(reasoning_parts),
+                "passes_rr_filter": r_r >= 1.5,
+            }
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
 
     # =========================================================================
     # Tier 5: Sentiment & news
@@ -869,6 +1204,369 @@ class SkillsRegistry:
             advisory["qwen_error"] = str(e)
 
         return advisory
+
+    def _s_universe_scan(self, limit: int = 50) -> dict:
+        """Pull the top USDT-margined pairs by 24h volume. Filter out stables + leveraged + illiquid.
+
+        Returns: {ok, n_total, n_filtered, candidates: [...]}
+        """
+        try:
+            tickers = self.bitget.get_tickers()
+            if not tickers:
+                return {"ok": False, "error": "No tickers returned"}
+            # Bitget ticker: symbol, lastPr, change24h, baseVolume, quoteVolume, etc.
+            candidates = []
+            for t in tickers:
+                sym = t.get("symbol", "")
+                # Must be USDT-margined
+                if not sym.endswith("USDT"):
+                    continue
+                # Filter out stables, leveraged tokens
+                base = sym.replace("USDT", "")
+                if any(stable in base for stable in ["USDC", "USDT", "DAI", "TUSD", "FDUSD", "BUSD", "EUR"]):
+                    continue
+                if any(lever in base for lever in ["UP", "DOWN", "BULL", "BEAR", "3L", "3S", "5L", "5S"]):
+                    continue
+                # Filter out very illiquid
+                quote_vol = float(t.get("quoteVolume", 0) or 0)
+                if quote_vol < 1_000_000:  # <$1M 24h
+                    continue
+                candidates.append({
+                    "symbol": sym,
+                    "last_price": float(t.get("lastPr", 0) or 0),
+                    "change_24h_pct": float(t.get("change24h", 0) or 0),
+                    "volume_24h_usd": quote_vol,
+                })
+            # Sort by volume desc
+            candidates.sort(key=lambda x: x["volume_24h_usd"], reverse=True)
+            return {
+                "ok": True,
+                "n_total": len(tickers),
+                "n_filtered": len(candidates),
+                "candidates": candidates[:limit],
+            }
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def _s_score_symbol(self, symbol: str) -> dict:
+        """Run a 9-signal multi-factor score on a single symbol. 0-1 composite.
+
+        Signals: RSI, MACD, funding rate, OI, volume spike, MEV safety, sentiment, ATR, news.
+        """
+        if not symbol.endswith("USDT"):
+            symbol = symbol + "USDT"
+        try:
+            signals = {}
+            sub_scores = {}
+
+            # 1. RSI
+            r = self._s_rsi(symbol=symbol)
+            rsi = float(r.get("rsi", 50))
+            # For long: oversold (low RSI) is bullish
+            signals["rsi"] = rsi
+            sub_scores["rsi"] = 1.0 - (abs(rsi - 30) / 30) if rsi <= 60 else max(0, 1.0 - (rsi - 60) / 40)
+
+            # 2. MACD
+            m = self._s_macd(symbol=symbol)
+            macd_hist = float(m.get("histogram", 0))
+            signals["macd_hist"] = macd_hist
+            # Bullish if histogram > 0
+            sub_scores["macd"] = 0.7 if macd_hist > 0 else 0.3
+
+            # 3. Funding rate
+            try:
+                fr_data = self._s_funding_hist(symbol=symbol, days=1)
+                # fr_data is a stub or list; just default to neutral if not structured
+                fr = 0
+                if isinstance(fr_data, list) and fr_data:
+                    fr = float(fr_data[0].get("fundingRate", 0))
+                elif isinstance(fr_data, dict):
+                    fr = float(fr_data.get("recent", 0))
+                signals["funding_rate"] = fr
+                # Negative funding (shorts pay longs) = bullish for longs
+                sub_scores["funding"] = 0.9 if fr < -0.0005 else 0.5 if fr < 0 else 0.3
+            except Exception:
+                sub_scores["funding"] = 0.5
+
+            # 4. Volume (24h vs estimated baseline)
+            try:
+                ticker = self.bitget.get_ticker(symbol)
+                if isinstance(ticker, list) and ticker:
+                    ticker = ticker[0]
+                vol_24h = float(ticker.get("quoteVolume", 0) or 0)
+                signals["volume_24h"] = vol_24h
+                sub_scores["volume"] = min(1.0, vol_24h / 50_000_000)  # $50M = full score
+            except Exception:
+                sub_scores["volume"] = 0.5
+
+            # 5. MEV safety
+            try:
+                mev = self._s_mev_check(token=symbol)
+                risk = mev.get("risk_level", "medium") if isinstance(mev, dict) else "medium"
+                sub_scores["mev"] = {"low": 0.9, "minimal": 1.0, "medium": 0.5, "high": 0.2}.get(risk, 0.5)
+            except Exception:
+                sub_scores["mev"] = 0.5
+
+            # 6. Sentiment (placeholder — use neutral)
+            sub_scores["sentiment"] = 0.5
+
+            # 7. ATR (volatility — moderate is best, too low = no movement, too high = risky)
+            atr_data = self._s_atr(symbol=symbol)
+            atr_pct = float(atr_data.get("atr_pct", 2))
+            # Sweet spot: 1-4% daily volatility
+            sub_scores["atr"] = 1.0 if 1 <= atr_pct <= 4 else 0.6 if atr_pct <= 6 else 0.3
+
+            # 8. ADX (trending = good)
+            adx_data = self._s_adx(symbol=symbol)
+            adx = float(adx_data.get("adx", 20))
+            sub_scores["adx"] = 0.9 if adx > 25 else 0.6 if adx > 20 else 0.3
+
+            # 9. News (placeholder — neutral unless we have a signal)
+            sub_scores["news"] = 0.5
+
+            # Weighted composite
+            weights = {
+                "rsi": 0.15, "macd": 0.10, "funding": 0.10, "volume": 0.10,
+                "mev": 0.10, "sentiment": 0.10, "atr": 0.10, "adx": 0.15, "news": 0.10,
+            }
+            composite = sum(sub_scores[k] * weights[k] for k in weights)
+
+            return {
+                "ok": True,
+                "symbol": symbol,
+                "composite": round(composite, 3),
+                "sub_scores": {k: round(v, 2) for k, v in sub_scores.items()},
+                "signals": signals,
+            }
+        except Exception as e:
+            return {"ok": False, "symbol": symbol, "error": str(e)}
+
+    def _s_analyze_symbol(self, symbol: str, amount_usd: float, side: str = "buy") -> dict:
+        """Deep analysis of a single symbol for semi-autonomous mode.
+
+        Returns: {ok, symbol, signals, chart, news, sentiment, suggested_tp_sl,
+                 thesis, qwen_pick, confidence, risks, qwen_reasoning}
+
+        The user can then /proceed (use bot's TP/SL) or /proceed SL X TP Y (override).
+        """
+        if not symbol.endswith("USDT"):
+            symbol = symbol + "USDT"
+
+        try:
+            score = self._s_score_symbol(symbol=symbol)
+            if not score.get("ok"):
+                return score
+
+            tp_sl = self._s_suggest_tp_sl(symbol=symbol, side=side)
+            if not tp_sl.get("ok"):
+                return tp_sl
+
+            # Get current ticker for the headline price
+            try:
+                ticker = self.bitget.get_ticker(symbol)
+                if isinstance(ticker, list) and ticker:
+                    ticker = ticker[0]
+                last = float(ticker.get("lastPr", 0))
+                change_24h = float(ticker.get("change24h", 0))
+                high_24h = float(ticker.get("high24h", 0))
+                low_24h = float(ticker.get("low24h", 0))
+            except Exception:
+                last = tp_sl.get("entry_price", 0)
+                change_24h = 0
+                high_24h = 0
+                low_24h = 0
+
+            signals = score.get("signals", {})
+            sub = score.get("sub_scores", {})
+            rsi = signals.get("rsi", 50)
+            macd_hist = signals.get("macd_hist", 0)
+            adx = tp_sl.get("adx", 0)
+
+            # Build a thesis via Qwen
+            qwen_pick = None
+            qwen_conf = 0.0
+            qwen_reasoning = ""
+            risks = []
+            try:
+                prompt = (
+                    f"You are a senior crypto trading analyst. Based on the following data, give your honest take.\n\n"
+                    f"Symbol: {symbol}\n"
+                    f"Side proposed: {side.upper()}\n"
+                    f"Amount: ${amount_usd:.2f}\n"
+                    f"Current price: ${last:.4f} (24h change: {change_24h:+.2f}%)\n"
+                    f"24h high: ${high_24h:.4f} | 24h low: ${low_24h:.4f}\n"
+                    f"RSI: {rsi:.1f} ({'oversold' if rsi < 30 else 'overbought' if rsi > 70 else 'neutral'})\n"
+                    f"MACD histogram: {macd_hist:.6f} ({'bullish' if macd_hist > 0 else 'bearish'})\n"
+                    f"ADX: {adx:.1f} ({'trending' if adx > 25 else 'choppy'})\n"
+                    f"Composite score (multi-signal): {score.get('composite', 0):.2f}/1.0\n"
+                    f"Suggested TP: ${tp_sl.get('tp_price', 0):.4f} ({tp_sl.get('tp_pct', 0):+.2f}%)\n"
+                    f"Suggested SL: ${tp_sl.get('sl_price', 0):.4f} ({tp_sl.get('sl_pct', 0):.2f}%)\n"
+                    f"Risk/Reward: {tp_sl.get('r_r_ratio', 0):.2f}:1\n\n"
+                    f"News: (placeholder)\n"
+                    f"Sentiment: (placeholder)\n\n"
+                    f"Return EXACTLY 4 lines in this format:\n"
+                    f"verdict: take|skip|caution\n"
+                    f"confidence: 0.0-1.0\n"
+                    f"reasoning: 2-3 sentences max, no filler\n"
+                    f"risks: comma-separated list of 1-4 risks, or 'none'\n"
+                )
+                resp = self.qwen.chat(
+                    messages=[
+                        {"role": "system", "content": (
+                            "You are a senior trading analyst. Be honest, not a yes-man. "
+                            "If the trade is a bad idea, say so. Output exactly 4 lines."
+                        )},
+                        {"role": "user", "content": prompt},
+                    ],
+                    max_tokens=300,
+                    temperature=0.3,
+                )
+                raw = resp["content"].strip()
+                for line in raw.split("\n"):
+                    lower = line.lower().strip()
+                    if lower.startswith("verdict:"):
+                        qwen_pick = line.split(":", 1)[1].strip().lower()
+                    elif lower.startswith("confidence:"):
+                        try:
+                            qwen_conf = float(line.split(":", 1)[1].strip())
+                        except (ValueError, IndexError):
+                            pass
+                    elif lower.startswith("reasoning:"):
+                        qwen_reasoning = line.split(":", 1)[1].strip()
+                    elif lower.startswith("risks:"):
+                        risk_text = line.split(":", 1)[1].strip()
+                        if risk_text.lower() != "none":
+                            risks = [r.strip() for r in risk_text.split(",") if r.strip()]
+            except Exception as e:
+                qwen_reasoning = f"(Qwen analysis unavailable: {e})"
+
+            return {
+                "ok": True,
+                "symbol": symbol,
+                "side": side,
+                "amount_usd": amount_usd,
+                "composite": score.get("composite", 0),
+                "sub_scores": sub,
+                "signals": signals,
+                "current_price": last,
+                "change_24h_pct": change_24h,
+                "high_24h": high_24h,
+                "low_24h": low_24h,
+                "tp_sl": tp_sl,
+                "qwen_pick": qwen_pick or "caution",
+                "qwen_confidence": qwen_conf,
+                "qwen_reasoning": qwen_reasoning,
+                "risks": risks,
+            }
+        except Exception as e:
+            return {"ok": False, "symbol": symbol, "error": str(e)}
+
+    def _s_find_best_trade(self, amount_usd: float, max_candidates: int = 10) -> dict:
+        """Autonomous mode: scan universe, score top candidates, ask Qwen for the final pick.
+
+        Returns: {ok, ranked: [...], qwen_pick, qwen_confidence, qwen_reasoning, suggested_tp_sl}
+        """
+        try:
+            universe = self._s_universe_scan(limit=50)
+            if not universe.get("ok"):
+                return universe
+            candidates = universe.get("candidates", [])[:max_candidates]
+            if not candidates:
+                return {"ok": False, "error": "No tradeable candidates"}
+
+            # Score each one
+            ranked = []
+            for c in candidates:
+                sym = c["symbol"]
+                try:
+                    score = self._s_score_symbol(symbol=sym)
+                    if score.get("ok"):
+                        ranked.append({
+                            "symbol": sym,
+                            "composite": score.get("composite", 0),
+                            "sub_scores": score.get("sub_scores", {}),
+                            "current_price": c.get("last_price", 0),
+                            "change_24h_pct": c.get("change_24h_pct", 0),
+                            "volume_24h": c.get("volume_24h_usd", 0),
+                        })
+                except Exception:
+                    continue
+            # Sort by composite
+            ranked.sort(key=lambda x: x["composite"], reverse=True)
+            top_n = ranked[:5]
+
+            if not top_n:
+                return {"ok": False, "error": "No candidates scored above threshold"}
+
+            # Ask Qwen for the final pick
+            qwen_pick = None
+            qwen_conf = 0.0
+            qwen_reasoning = ""
+            try:
+                lines = []
+                for i, r in enumerate(top_n):
+                    lines.append(
+                        f"#{i+1} {r['symbol']}: composite={r['composite']:.2f}, "
+                        f"price=${r['current_price']:.4f}, 24h={r['change_24h_pct']:+.2f}%, "
+                        f"vol=${r['volume_24h']:,.0f}"
+                    )
+                prompt = (
+                    f"You are a senior trader. The user wants to deploy ${amount_usd:.2f} in a long position.\n\n"
+                    f"Top {len(top_n)} candidates by multi-signal score:\n"
+                    + "\n".join(lines) +
+                    f"\n\nReturn EXACTLY 3 lines in this format:\n"
+                    f"pick: SYMBOL (e.g. SOLUSDT) or 'skip'\n"
+                    f"confidence: 0.0-1.0\n"
+                    f"reasoning: 2-3 sentences max\n"
+                )
+                resp = self.qwen.chat(
+                    messages=[
+                        {"role": "system", "content": "You are a senior trading analyst. Be selective. Skip if no clear edge."},
+                        {"role": "user", "content": prompt},
+                    ],
+                    max_tokens=200,
+                    temperature=0.3,
+                )
+                raw = resp["content"].strip()
+                for line in raw.split("\n"):
+                    lower = line.lower().strip()
+                    if lower.startswith("pick:"):
+                        qwen_pick = line.split(":", 1)[1].strip().upper()
+                    elif lower.startswith("confidence:"):
+                        try:
+                            qwen_conf = float(line.split(":", 1)[1].strip())
+                        except (ValueError, IndexError):
+                            pass
+                    elif lower.startswith("reasoning:"):
+                        qwen_reasoning = line.split(":", 1)[1].strip()
+            except Exception as e:
+                qwen_reasoning = f"(Qwen synthesis unavailable: {e})"
+
+            # If Qwen picked a symbol, get its TP/SL suggestion
+            suggested_tp_sl = None
+            if qwen_pick and qwen_pick != "SKIP" and qwen_pick.endswith("USDT"):
+                try:
+                    suggested_tp_sl = self._s_suggest_tp_sl(symbol=qwen_pick, side="buy")
+                except Exception:
+                    pass
+
+            return {
+                "ok": True,
+                "amount_usd": amount_usd,
+                "ranked": top_n,
+                "qwen_pick": qwen_pick,
+                "qwen_confidence": qwen_conf,
+                "qwen_reasoning": qwen_reasoning,
+                "suggested_tp_sl": suggested_tp_sl,
+                "executes": (
+                    qwen_pick and qwen_pick != "SKIP"
+                    and suggested_tp_sl
+                    and suggested_tp_sl.get("passes_rr_filter", False)
+                    and qwen_conf >= 0.6
+                ),
+            }
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
 
     def _s_open_position_with_strategy(
         self,

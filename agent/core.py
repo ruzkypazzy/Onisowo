@@ -13,6 +13,7 @@ The agent uses Qwen for ALL reasoning. Bitget is the hands. SQLite is the memory
 """
 
 import os
+import re
 import json
 import logging
 import time
@@ -23,6 +24,10 @@ from clients.bitget import BitgetClient, BitgetAPIError
 from clients.qwen import QwenClient
 from db.database import Database
 from risk.engine import RiskEngine
+
+CHECK_MARK = "\u2705"
+CROSS_MARK = "\u274c"
+WARNING_MARK = "\u26a0\ufe0f"
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +172,12 @@ class Agent:
         # the user to either /force-buy, /force-sell, or /abort.
         # Keyed by user_id; expires after 5 minutes.
         self._pending_advisories: dict[int, dict] = {}
+
+        # Pending analysis cache: when /analyze is run, we stash the full analysis
+        # (signals, suggested TP/SL, Qwen thesis) here. The user can then /proceed
+        # to enter the trade with bot's TP/SL, /proceed SL X TP Y to override,
+        # or /abort to cancel. Keyed by user_id; expires after 5 minutes.
+        self._pending_analyses: dict[int, dict] = {}
 
         # The Strategist — autonomous trading runtime (background thread)
         from agent.strategist import Strategist, StrategistConfig
@@ -369,11 +380,397 @@ class Agent:
         return self._handle_force(ctx, side=side)
 
     def _cmd_abort(self, ctx: AgentContext) -> str:
-        """Cancel a pending advisory trade."""
+        """Cancel a pending advisory or analysis trade."""
+        cleared = []
         if ctx.user_id in self._pending_advisories:
             del self._pending_advisories[ctx.user_id]
-            return "✅ Trade aborted. The advisory has been cleared."
-        return "No pending trade to abort."
+            cleared.append("advisory")
+        if ctx.user_id in self._pending_analyses:
+            del self._pending_analyses[ctx.user_id]
+            cleared.append("analysis")
+        if cleared:
+            return f"✅ Aborted: {', '.join(cleared)} cleared."
+        return "No pending trade or analysis to abort."
+
+    # -------------------------------------------------------------------------
+    # Semi-autonomous mode: /analyze SYMBOL USDT, /proceed, /abort
+    # -------------------------------------------------------------------------
+
+    def _cmd_analyze(self, ctx: AgentContext) -> str:
+        """Deep analysis of a symbol (or top picks if no symbol) for semi-autonomous mode.
+
+        Usage:
+            /analyze SOL 2         — analyze SOL with $2 trade size
+            /analyze 2             — show top 3 candidates for a $2 trade
+        """
+        # Parse args from raw message (more flexible than ctx.args)
+        msg = (ctx.user_message or "").strip()
+        # Remove the leading /analyze
+        rest = re.sub(r"^/analyze\s*", "", msg, flags=re.IGNORECASE).strip()
+
+        if not rest:
+            return (
+                "Usage:\n"
+                "  `/analyze SYMBOL USDT_AMOUNT` — deep-analyze a symbol\n"
+                "  `/analyze USDT_AMOUNT` — scan top picks for that size\n\n"
+                "Example: `/analyze SOL 2`"
+            )
+
+        # Detect: is this "analyze SYMBOL AMOUNT" or "analyze AMOUNT"?
+        m = re.match(r"^(\S+)\s+(\d+(?:\.\d+)?)$", rest)
+        if m and m.group(1).upper().endswith("USDT") is False and not m.group(1).upper().isalpha() is False:
+            # Could be "SOL 2" or "2" alone
+            pass
+        if m:
+            first = m.group(1)
+            second = m.group(2)
+            try:
+                # If first is a number, it's "analyze AMOUNT" → scan top picks
+                float(first)
+                return self._analyze_top_picks(ctx, amount_usd=float(first))
+            except ValueError:
+                # It's "analyze SYMBOL AMOUNT"
+                return self._analyze_single(ctx, symbol=first, amount_usd=float(second))
+        # Could be just "analyze 2" without second token
+        try:
+            amount = float(rest)
+            return self._analyze_top_picks(ctx, amount_usd=amount)
+        except ValueError:
+            return "❌ Usage: `/analyze SYMBOL USDT_AMOUNT` or `/analyze USDT_AMOUNT`"
+
+    def _analyze_single(self, ctx: AgentContext, symbol: str, amount_usd: float) -> str:
+        """Analyze a single symbol and cache the result as a pending analysis."""
+        try:
+            result = self.skills.invoke("analyze_symbol", {"symbol": symbol, "amount_usd": amount_usd, "side": "buy"})
+            result = result.get("result", result) if isinstance(result, dict) else result
+            if not result.get("ok"):
+                return f"❌ Analysis failed: {result.get('error', 'unknown')}"
+
+            # Cache the analysis for /proceed
+            self._pending_analyses[ctx.user_id] = {
+                "symbol": result["symbol"],
+                "side": result.get("side", "buy"),
+                "amount_usd": amount_usd,
+                "tp_sl": result["tp_sl"],
+                "qwen_pick": result.get("qwen_pick"),
+                "qwen_confidence": result.get("qwen_confidence"),
+                "qwen_reasoning": result.get("qwen_reasoning", ""),
+                "composite": result.get("composite", 0),
+                "current_price": result.get("current_price", 0),
+                "risks": result.get("risks", []),
+                "timestamp": time.time(),
+            }
+
+            return self._format_analyze_response(result)
+        except Exception as e:
+            logger.exception(f"_analyze_single failed: {e}")
+            return f"❌ Analysis failed: {e}"
+
+    def _analyze_top_picks(self, ctx: AgentContext, amount_usd: float) -> str:
+        """Scan the universe, return top 3 candidates with their analyses."""
+        try:
+            best = self.skills.invoke("find_best_trade", {"amount_usd": amount_usd, "max_candidates": 5})
+            best = best.get("result", best) if isinstance(best, dict) else best
+            if not best.get("ok"):
+                return f"❌ Scan failed: {best.get('error', 'unknown')}"
+
+            ranked = best.get("ranked", [])
+            qwen_pick = best.get("qwen_pick")
+            qwen_conf = best.get("qwen_confidence", 0)
+            qwen_reasoning = best.get("qwen_reasoning", "")
+
+            lines = [f"🤖 *Market scan complete — ${amount_usd:.2f} trade*\n"]
+            for i, r in enumerate(ranked, 1):
+                sym = r["symbol"]
+                comp = r.get("composite", 0)
+                price = r.get("current_price", 0)
+                chg = r.get("change_24h_pct", 0)
+                medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉" if i == 3 else f"  {i}."
+                lines.append(f"{medal} *{sym}* — composite `{comp:.2f}`")
+                lines.append(f"   Price: `${price:.4f}` (24h: {chg:+.2f}%)")
+            lines.append(f"\n🧠 *Qwen's pick:* {qwen_pick} (confidence {qwen_conf:.2f})")
+            lines.append(f"   _{qwen_reasoning}_")
+
+            # If Qwen picked something with R:R OK, also analyze that one for /proceed
+            if qwen_pick and qwen_pick != "SKIP" and best.get("suggested_tp_sl", {}).get("passes_rr_filter"):
+                self._pending_analyses[ctx.user_id] = {
+                    "symbol": qwen_pick,
+                    "side": "buy",
+                    "amount_usd": amount_usd,
+                    "tp_sl": best["suggested_tp_sl"],
+                    "qwen_pick": qwen_pick,
+                    "qwen_confidence": qwen_conf,
+                    "qwen_reasoning": qwen_reasoning,
+                    "composite": next((r["composite"] for r in ranked if r["symbol"] == qwen_pick), 0),
+                    "current_price": best["suggested_tp_sl"].get("entry_price", 0),
+                    "risks": [],
+                    "timestamp": time.time(),
+                }
+                tp_sl = best["suggested_tp_sl"]
+                lines.append(
+                    f"\n📐 *Suggested levels for {qwen_pick}:*\n"
+                    f"   Entry: `${tp_sl.get('entry_price', 0):.4f}`\n"
+                    f"   TP: `${tp_sl.get('tp_price', 0):.4f}` ({tp_sl.get('tp_pct', 0):+.2f}%) | "
+                    f"SL: `${tp_sl.get('sl_price', 0):.4f}` ({tp_sl.get('sl_pct', 0):.2f}%)\n"
+                    f"   R:R = {tp_sl.get('r_r_ratio', 0):.2f}:1 \u2705\n"
+                )
+                lines.append(f"→ `/proceed` to enter with bot's TP/SL")
+                lines.append(f"→ `/analyze {qwen_pick.replace('USDT', '')} {amount_usd}` for full breakdown")
+            else:
+                lines.append(f"\n_(No high-conviction pick; use `/analyze SYMBOL {amount_usd}` to drill in.)_")
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.exception(f"_analyze_top_picks failed: {e}")
+            return f"❌ Scan failed: {e}"
+
+    def _format_analyze_response(self, result: dict) -> str:
+        """Format a single-symbol analyze response."""
+        sym = result["symbol"]
+        side = result.get("side", "buy")
+        amount = result.get("amount_usd", 0)
+        composite = result.get("composite", 0)
+        sub = result.get("sub_scores", {})
+        signals = result.get("signals", {})
+        last = result.get("current_price", 0)
+        change_24h = result.get("change_24h_pct", 0)
+        high_24h = result.get("high_24h", 0)
+        low_24h = result.get("low_24h", 0)
+        tp_sl = result.get("tp_sl", {})
+        qwen_pick = result.get("qwen_pick", "caution")
+        qwen_conf = result.get("qwen_confidence", 0)
+        qwen_reasoning = result.get("qwen_reasoning", "")
+        risks = result.get("risks", [])
+
+        rsi = signals.get("rsi", 50)
+        macd_hist = signals.get("macd_hist", 0)
+        atr_pct = tp_sl.get("atr_pct", 0)
+        adx = tp_sl.get("adx", 0)
+        method = tp_sl.get("method", "?")
+        r_r = tp_sl.get("r_r_ratio", 0)
+        rr_ok = tp_sl.get("passes_rr_filter", False)
+
+        verdict_emoji = "✅" if qwen_pick == "take" and rr_ok else "⚠️" if qwen_pick == "caution" else "❌"
+        verdict_text = qwen_pick.upper()
+        rr_marker = CHECK_MARK if rr_ok else CROSS_MARK + " (below 1.5 threshold)"
+
+        lines = [
+            f"🤖 *Analysis: {side.upper()} ${amount:.2f} of {sym}*\n",
+            f"*Signals (composite {composite:.2f}/1.0):*",
+            f"   📊 RSI: {rsi:.1f} ({'oversold' if rsi < 30 else 'overbought' if rsi > 70 else 'neutral'})",
+            f"   📈 MACD histogram: {macd_hist:+.6f} ({'bullish' if macd_hist > 0 else 'bearish'})",
+            f"   🌊 ATR: {atr_pct:.2f}% (volatility)",
+            f"   🧭 ADX: {adx:.1f} ({'trending' if adx > 25 else 'choppy'})",
+            f"   💰 Current: ${last:.4f} (24h: {change_24h:+.2f}%)",
+            f"   📏 24h range: ${low_24h:.4f} – ${high_24h:.4f}",
+            "",
+            f"*Qwen verdict:* {verdict_emoji} *{verdict_text}* (confidence {qwen_conf:.2f})",
+            f"   _{qwen_reasoning}_",
+            "",
+            f"*Bot's suggested levels ({method}):*",
+            f"   🎯 TP: ${tp_sl.get('tp_price', 0):.4f} ({tp_sl.get('tp_pct', 0):+.2f}%)",
+            f"   🛑 SL: ${tp_sl.get('sl_price', 0):.4f} ({tp_sl.get('sl_pct', 0):.2f}%)",
+            f"   ⚖️ R:R = {r_r:.2f}:1 {rr_marker}",
+        ]
+        if risks:
+            lines.append("")
+            lines.append(f"*Risks:* {', '.join(risks)}")
+
+        lines.append("")
+        lines.append("────────────────────────────────────")
+        lines.append("→ `/proceed` to enter with bot's TP/SL")
+        lines.append("→ `/proceed SL X TP Y` to override (e.g., `/proceed SL 2 TP 6`)")
+        lines.append("→ `/abort` to cancel")
+
+        return "\n".join(lines)
+
+    def _cmd_proceed(self, ctx: AgentContext) -> str:
+        """Proceed with a pending analysis. Optional overrides: /proceed SL X TP Y"""
+        pending = self._pending_analyses.get(ctx.user_id)
+        if not pending:
+            return (
+                "❌ No pending analysis. Use `/analyze SYMBOL USDT` first.\n"
+                "Examples: `/analyze SOL 2`, `/analyze BTC 1.5`"
+            )
+        if time.time() - pending.get("timestamp", 0) > 300:
+            del self._pending_analyses[ctx.user_id]
+            return "⌛ The pending analysis expired. Please run `/analyze` again."
+
+        # Parse optional SL/TP overrides from user message: /proceed SL 2 TP 6
+        msg = (ctx.user_message or "").strip()
+        rest = re.sub(r"^/proceed\s*", "", msg, flags=re.IGNORECASE).strip()
+        sl_override = None
+        tp_override = None
+        m_sl = re.search(r"SL\s+(\d+(?:\.\d+)?)", rest, re.IGNORECASE)
+        m_tp = re.search(r"TP\s+(\d+(?:\.\d+)?)", rest, re.IGNORECASE)
+        if m_sl:
+            sl_override = float(m_sl.group(1))
+        if m_tp:
+            tp_override = float(m_tp.group(1))
+
+        sym = pending["symbol"]
+        side = pending.get("side", "buy")
+        amount_usd = pending["amount_usd"]
+        tp_sl = pending.get("tp_sl", {})
+
+        # If user overrode SL/TP (as %s), compute prices
+        if sl_override is not None or tp_override is not None:
+            entry = float(tp_sl.get("entry_price", pending.get("current_price", 0)))
+            if sl_override is not None:
+                if side == "buy":
+                    new_sl_price = entry * (1 - sl_override / 100)
+                else:
+                    new_sl_price = entry * (1 + sl_override / 100)
+                tp_sl["sl_price"] = round(new_sl_price, 4)
+                tp_sl["sl_pct"] = sl_override
+            if tp_override is not None:
+                if side == "buy":
+                    new_tp_price = entry * (1 + tp_override / 100)
+                else:
+                    new_tp_price = entry * (1 - tp_override / 100)
+                tp_sl["tp_price"] = round(new_tp_price, 4)
+                tp_sl["tp_pct"] = tp_override
+            if tp_sl.get("sl_pct") and tp_sl.get("tp_pct"):
+                tp_sl["r_r_ratio"] = round(tp_sl["tp_pct"] / tp_sl["sl_pct"], 2)
+                tp_sl["passes_rr_filter"] = tp_sl["r_r_ratio"] >= 1.5
+
+        # Risk check
+        portfolio = self.bitget.get_portfolio_value_usdt()
+        open_positions = len(self.db.get_open_trades())
+        allowed, risk_reason = self.risk.check_order(
+            symbol=sym, side=side, size_usd=amount_usd,
+            portfolio_value_usd=portfolio, open_positions_count=open_positions,
+        )
+        if not allowed:
+            del self._pending_analyses[ctx.user_id]
+            return f"🛑 *Trade blocked by risk engine:*\n\n{risk_reason}"
+
+        # Execute via the strategy opener
+        thesis = (
+            f"User-confirmed analysis: {side.upper()} ${amount_usd:.2f} {sym}. "
+            f"Qwen said: {pending.get('qwen_pick', '?')} (conf {pending.get('qwen_confidence', 0):.2f}). "
+            f"Reason: {pending.get('qwen_reasoning', '')[:200]}"
+        )
+        try:
+            res = self.skills.invoke("open_position_with_strategy", {
+                "symbol": sym,
+                "side": side,
+                "amount_usd": amount_usd,
+                "tp_pct": tp_sl.get("tp_pct", 10.0),
+                "sl_pct": tp_sl.get("sl_pct", 5.0),
+                "thesis": thesis,
+            })
+            res = res.get("result", res) if isinstance(res, dict) else res
+            if res.get("ok"):
+                del self._pending_analyses[ctx.user_id]
+                return (
+                    f"✅ *Trade executed (semi-autonomous)*\n\n"
+                    f"📋 Order ID: `{res.get('order_id', '?')}`\n"
+                    f"💱 {side.upper()} ${amount_usd:.2f} of {sym}\n"
+                    f"💰 Price: `${res.get('entry_price', 0):.4f}`\n"
+                    f"📐 Size: `{res.get('size', 0):.6f}`\n"
+                    f"🎯 TP: `${tp_sl.get('tp_price', 0):.4f}` ({tp_sl.get('tp_pct', 0):+.2f}%)\n"
+                    f"🛑 SL: `${tp_sl.get('sl_price', 0):.4f}` ({tp_sl.get('sl_pct', 0):.2f}%)\n"
+                    f"⚖️ R:R = {tp_sl.get('r_r_ratio', 0):.2f}:1\n\n"
+                    f"📓 Strategist is now managing this position."
+                )
+            else:
+                return f"❌ Trade failed: {res.get('error', res.get('reason', 'unknown'))}"
+        except Exception as e:
+            logger.exception(f"_cmd_proceed failed: {e}")
+            return f"❌ Proceed failed: {e}"
+
+    # -------------------------------------------------------------------------
+    # Autonomous mode: /autotrade USDT_AMOUNT
+    # -------------------------------------------------------------------------
+
+    def _cmd_autotrade(self, ctx: AgentContext) -> str:
+        """Autonomous trade: bot scans market, picks best, executes.
+
+        Usage: /autotrade USDT_AMOUNT
+        """
+        msg = (ctx.user_message or "").strip()
+        rest = re.sub(r"^/autotrade\s*", "", msg, flags=re.IGNORECASE).strip()
+        try:
+            amount_usd = float(rest)
+        except ValueError:
+            return "❌ Usage: `/autotrade USDT_AMOUNT`\n\nExample: `/autotrade 2`"
+
+        try:
+            result = self.skills.invoke("find_best_trade", {"amount_usd": amount_usd, "max_candidates": 5})
+            result = result.get("result", result) if isinstance(result, dict) else result
+            if not result.get("ok"):
+                return f"❌ Autonomous scan failed: {result.get('error', 'unknown')}"
+
+            qwen_pick = result.get("qwen_pick")
+            qwen_conf = result.get("qwen_confidence", 0)
+            suggested = result.get("suggested_tp_sl") or {}
+            executes = result.get("executes", False)
+
+            if not executes or not qwen_pick or qwen_pick == "SKIP":
+                # Safety net: don't auto-execute. Show picks and let user /analyze + /proceed
+                ranked = result.get("ranked", [])
+                lines = [
+                    f"🤖 *Autonomous scan complete — ${amount_usd:.2f}*\n",
+                    f"🧠 *Qwen's verdict:* *{qwen_pick or 'SKIP'}* (confidence {qwen_conf:.2f})",
+                    f"   _{result.get('qwen_reasoning', '')}_",
+                    "",
+                    f"⏸ *Safety net: not auto-executing.* Top picks:",
+                ]
+                for i, r in enumerate(ranked[:3], 1):
+                    medal = "🥇" if i == 1 else "🥈" if i == 2 else "🥉"
+                    lines.append(f"{medal} {r['symbol']} (composite {r['composite']:.2f})")
+                lines.append("")
+                lines.append("→ `/analyze SYMBOL " + f"{amount_usd}" + "` to drill in")
+                lines.append("→ `/autotrade confirm` to force-execute the suggested pick (if any)")
+                return "\n".join(lines)
+
+            # Auto-execute path
+            sym = qwen_pick
+            side = "buy"
+            tp_sl = suggested
+            thesis = (
+                f"Autonomous pick: BUY ${amount_usd:.2f} {sym}. "
+                f"Qwen confidence: {qwen_conf:.2f}. "
+                f"Reason: {result.get('qwen_reasoning', '')[:200]}"
+            )
+
+            # Risk check
+            portfolio = self.bitget.get_portfolio_value_usdt()
+            open_positions = len(self.db.get_open_trades())
+            allowed, risk_reason = self.risk.check_order(
+                symbol=sym, side=side, size_usd=amount_usd,
+                portfolio_value_usd=portfolio, open_positions_count=open_positions,
+            )
+            if not allowed:
+                return f"🛑 *Autonomous trade blocked by risk engine:*\n\n{risk_reason}"
+
+            res = self.skills.invoke("open_position_with_strategy", {
+                "symbol": sym, "side": side, "amount_usd": amount_usd,
+                "tp_pct": tp_sl.get("tp_pct", 10.0),
+                "sl_pct": tp_sl.get("sl_pct", 5.0),
+                "thesis": thesis,
+            })
+            res = res.get("result", res) if isinstance(res, dict) else res
+            if res.get("ok"):
+                return (
+                    f"✅ *Autonomous trade executed*\n\n"
+                    f"🤖 Bot picked: *{sym}* (Qwen confidence {qwen_conf:.2f})\n"
+                    f"📋 Order ID: `{res.get('order_id', '?')}`\n"
+                    f"💱 BUY ${amount_usd:.2f} of {sym}\n"
+                    f"💰 Price: `${res.get('entry_price', 0):.4f}`\n"
+                    f"📐 Size: `{res.get('size', 0):.6f}`\n"
+                    f"🎯 TP: `${tp_sl.get('tp_price', 0):.4f}` ({tp_sl.get('tp_pct', 0):+.2f}%)\n"
+                    f"🛑 SL: `${tp_sl.get('sl_price', 0):.4f}` ({tp_sl.get('sl_pct', 0):.2f}%)\n"
+                    f"⚖️ R:R = {tp_sl.get('r_r_ratio', 0):.2f}:1\n\n"
+                    f"🧠 Reason: {result.get('qwen_reasoning', '')[:300]}\n\n"
+                    f"📓 Strategist is managing this position with adaptive TP/SL."
+                )
+            else:
+                return f"❌ Autonomous trade failed: {res.get('error', res.get('reason', 'unknown'))}"
+        except Exception as e:
+            logger.exception(f"_cmd_autotrade failed: {e}")
+            return f"❌ Autotrade failed: {e}"
 
     # -------------------------------------------------------------------------
     # Strategist (autonomous trading runtime)

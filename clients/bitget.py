@@ -150,11 +150,31 @@ class BitgetClient:
         return self._request("GET", "/api/v2/spot/account/assets", params=params)
 
     def get_account_balance(self, coin: str = "USDT") -> float:
-        """Get available balance for a specific coin (e.g., 'USDT' → 10.97)."""
+        """Get available balance for a specific coin across spot and futures.
+
+        Tries spot first; if 0 or empty, falls back to futures account
+        (since users may hold funds in USDT-margined futures even with no spot USDT).
+        Returns the available balance for the requested coin.
+        """
         try:
             assets = self.get_account_assets(coin=coin)
             if assets and len(assets) > 0:
-                return float(assets[0].get("available", "0"))
+                spot_available = float(assets[0].get("available", "0"))
+                if spot_available > 0:
+                    return spot_available
+        except Exception:
+            pass
+        # Spot is empty — try futures account
+        try:
+            url = "/api/v2/mix/account/accounts"
+            params = {"productType": "USDT-FUTURES", "marginCoin": coin}
+            resp = self._request("GET", url, params=params, signed=True)
+            if isinstance(resp, dict):
+                data = resp.get("data", resp)
+                if isinstance(data, list) and data:
+                    return float(data[0].get("available", "0") or 0)
+                if isinstance(data, dict):
+                    return float(data.get("available", "0") or 0)
         except Exception:
             pass
         return 0.0

@@ -298,9 +298,16 @@ class Agent:
 
     def _cmd_status(self, ctx: AgentContext) -> str:
         try:
-            total_value = self.bitget.get_portfolio_value_usdt()
-            cash = self.bitget.get_account_balance("USDT")
-            positions = self.bitget.get_positions()
+            cash = self.bitget.get_account_balance("USDT")  # tries spot, then futures
+            try:
+                total_value = self.bitget.get_portfolio_value_usdt()
+            except Exception:
+                total_value = cash  # fall back to cash if portfolio query fails
+            # Spot accounts don't have futures positions; tolerate the 400 gracefully
+            try:
+                positions = self.bitget.get_positions()
+            except (BitgetAPIError, Exception):
+                positions = []
 
             # Get recent trade stats
             recent = self.db.get_recent_trades(limit=100)

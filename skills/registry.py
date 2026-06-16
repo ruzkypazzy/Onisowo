@@ -1226,7 +1226,7 @@ class SkillsRegistry:
         Returns: {ok, n_total, n_filtered, candidates: [...]}
         """
         try:
-            tickers = self.bitget.get_tickers()
+            tickers = self.bitget.get_all_tickers()
             if not tickers:
                 return {"ok": False, "error": "No tickers returned"}
             # Bitget ticker: symbol, lastPr, change24h, baseVolume, quoteVolume, etc.

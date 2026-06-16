@@ -12,6 +12,7 @@ Free-form text → routed through the agent brain (Qwen).
 
 import os
 import re
+import json
 import logging
 import asyncio
 from typing import Optional
@@ -160,12 +161,42 @@ def run_bot(token: Optional[str] = None):
     # Handlers
     # -------------------------------------------------------------------------
 
+    async def send_typing(update):
+        """Send 'typing...' action repeatedly while the agent thinks."""
+        from telegram.constants import ChatAction
+        try:
+            await update.message.chat.send_action(ChatAction.TYPING)
+        except Exception:
+            pass
+
+    async def send_status(update, text: str):
+        """Send a transient 'thinking' status message. Returns the message object so it can be edited."""
+        try:
+            msg = await update.message.reply_text(text)
+            return msg
+        except Exception as e:
+            logger.exception(f"send_status failed: {e}")
+            return None
+
+    async def edit_status(msg, text: str):
+        """Edit a previously-sent status message in place."""
+        if msg is None:
+            return
+        try:
+            await msg.edit_text(text)
+        except Exception:
+            pass
+
     async def cmd_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle a slash command."""
         if not update.message or not update.message.text:
             return
         text = update.message.text
         cmd, args = parse_command_args(text)
+
+        # Show 'typing...' indicator + a status message immediately
+        await send_typing(update)
+        status_msg = await send_status(update, "🤔 Reading your request…")
 
         ctx = AgentContext(
             user_id=update.effective_user.id if update.effective_user else 0,
@@ -174,28 +205,83 @@ def run_bot(token: Optional[str] = None):
             args=args,
         )
 
-        # Run the agent in a thread to avoid blocking the event loop
+        # Run the agent in a thread to avoid blocking the event loop.
+        # During execution, update the status message with progress hints.
+        import re as _re
+        m = _re.match(r"^/(\w+)", text.strip())
+        cmd_name = m.group(1) if m else "command"
+        # Step-by-step status flow
+        if cmd_name in ("buy", "sell"):
+            await edit_status(status_msg, "📊 Fetching live price for " + str(args.get("symbol", "?")) + "…")
+            await asyncio.sleep(0.4)
+            await edit_status(status_msg, "🛡️ Running risk check…")
+            await asyncio.sleep(0.4)
+            await edit_status(status_msg, "🧠 Asking Qwen for reasoning…")
+        elif cmd_name == "analyze":
+            await edit_status(status_msg, "📡 Pulling market data (candles, RSI, MACD, ATR, ADX, S/R)…")
+            await asyncio.sleep(0.4)
+            await edit_status(status_msg, "🧮 Computing 9-signal composite score…")
+            await asyncio.sleep(0.4)
+            await edit_status(status_msg, "🤖 Asking Qwen for the trade thesis…")
+        elif cmd_name == "autotrade":
+            await edit_status(status_msg, "🔍 Scanning top 50 USDT pairs by volume…")
+            await asyncio.sleep(0.4)
+            await edit_status(status_msg, "📊 Scoring top 10 with 9-signal model…")
+            await asyncio.sleep(0.4)
+            await edit_status(status_msg, "🤖 Asking Qwen to pick the winner…")
+        elif cmd_name == "strategist":
+            await edit_status(status_msg, "🤖 Checking the autonomous loop status…")
+        elif cmd_name in ("start", "help", "about", "skills"):
+            pass  # no streaming needed for static pages
+        else:
+            await edit_status(status_msg, "🧠 Thinking…")
         try:
             response = await asyncio.to_thread(agent.handle, ctx)
         except Exception as e:
             logger.exception(f"Agent error: {e}")
             response = f"❌ Error: {e}"
 
-        # Send response (split if too long — Telegram 4096 char limit)
-        for chunk in _split_message(response):
-            await update.message.reply_text(chunk, parse_mode="Markdown", disable_web_page_preview=True)
+        # Edit the status message with the final result (or delete it and send a fresh one for long replies)
+        if response and len(response) <= 3800:
+            await edit_status(status_msg, response)
+        else:
+            # Long reply — delete the status placeholder and send the real answer
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
+            for chunk in _split_message(response):
+                await update.message.reply_text(chunk, parse_mode="Markdown", disable_web_page_preview=True)
 
     async def freeform_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Handle free-form text (not a slash command)."""
         if not update.message or not update.message.text:
             return
         text = update.message.text
+        await send_typing(update)
+        status_msg = await send_status(update, "🤔 Reading your prompt…")
         ctx = AgentContext(
             user_id=update.effective_user.id if update.effective_user else 0,
             user_message=text,
             command="ask",
             args={"text": text},
         )
+        # Decide the right progress based on intent
+        lower = text.lower().strip()
+        if any(w in lower for w in ["buy", "sell", "long", "short", "ape", "dump", "load", "fade"]):
+            await edit_status(status_msg, "🔍 Detecting trade intent…")
+            await asyncio.sleep(0.3)
+            await edit_status(status_msg, "📊 Fetching live market data…")
+            await asyncio.sleep(0.3)
+            await edit_status(status_msg, "🛡️ Validating risk…")
+        elif any(w in lower for w in ["scan", "find", "autotrade", "best"]):
+            await edit_status(status_msg, "🔍 Scanning top 50 USDT pairs…")
+            await asyncio.sleep(0.3)
+            await edit_status(status_msg, "🧮 Scoring candidates…")
+            await asyncio.sleep(0.3)
+            await edit_status(status_msg, "🤖 Asking Qwen for the final pick…")
+        else:
+            await edit_status(status_msg, "🧠 Asking Qwen…")
         try:
             response = await asyncio.to_thread(agent.handle, ctx)
         except Exception as e:
@@ -208,9 +294,91 @@ def run_bot(token: Optional[str] = None):
     async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Telegram bot error: {context.error}")
 
+    async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Voice message handler: download .ogg, transcribe via Qwen ASR (or Whisper),
+        then route the transcription through the same prompt flow as text."""
+        if not update.message or not update.message.voice:
+            return
+        voice = update.message.voice
+        await send_typing(update)
+        status_msg = await send_status(update, "🎙️ Listening to your voice…")
+        try:
+            # Download the .ogg file from Telegram
+            tg_file = await voice.get_file()
+            ogg_bytes = await tg_file.download_as_bytearray()
+            await edit_status(status_msg, "🧠 Transcribing audio (Qwen ASR)…")
+
+            # Try the Qwen OpenAI-compatible /audio/transcriptions endpoint.
+            # If unavailable, fall back to a friendly message.
+            import os as _os
+            import io as _io
+            import base64 as _b64
+            from urllib import request as _urlreq
+            api_key = _os.environ.get("BITGET_QWEN_API_KEY", "")
+            base_url = _os.environ.get("QWEN_BASE_URL", "https://hackathon.bitgetops.com/v1")
+            transcript = None
+            if api_key:
+                try:
+                    # multipart/form-data upload
+                    boundary = "----OnisowoBoundary"
+                    body = (
+                        f"--{boundary}\r\n"
+                        f"Content-Disposition: form-data; name=\"file\"; filename=\"voice.ogg\"\r\n"
+                        f"Content-Type: audio/ogg\r\n\r\n"
+                    ).encode() + bytes(ogg_bytes) + (
+                        f"\r\n--{boundary}\r\n"
+                        f"Content-Disposition: form-data; name=\"model\"\r\n\r\nqwen-audio-asr"
+                        f"\r\n--{boundary}--\r\n"
+                    ).encode()
+                    req = _urlreq.Request(
+                        f"{base_url}/audio/transcriptions",
+                        data=body,
+                        headers={
+                            "Authorization": f"Bearer {api_key}",
+                            "Content-Type": f"multipart/form-data; boundary={boundary}",
+                        },
+                        method="POST",
+                    )
+                    with _urlreq.urlopen(req, timeout=30) as resp:
+                        result = json.loads(resp.read().decode())
+                        transcript = result.get("text") or result.get("transcript")
+                except Exception as e:
+                    logger.warning(f"Qwen ASR failed: {e}")
+
+            if not transcript:
+                # Friendly fallback
+                await edit_status(status_msg, "⚠️ Voice transcription unavailable. Try `/llm` to verify LLM, or send the message as text.")
+                return
+
+            # Got the transcript — show it, then route through the prompt flow
+            await edit_status(status_msg, f"🎙️ Heard: \"{transcript}\"\n\n🧠 Processing…")
+            ctx = AgentContext(
+                user_id=update.effective_user.id if update.effective_user else 0,
+                user_message=transcript,
+                command="ask",
+                args={"text": transcript},
+            )
+            try:
+                response = await asyncio.to_thread(agent.handle, ctx)
+            except Exception as e:
+                logger.exception(f"Agent error after voice: {e}")
+                response = f"❌ Error: {e}"
+            if response and len(response) <= 3800:
+                await edit_status(status_msg, f"🎙️ Heard: \"{transcript}\"\n\n{response}")
+            else:
+                try:
+                    await status_msg.delete()
+                except Exception:
+                    pass
+                await update.message.reply_text(f"🎙️ Heard: \"{transcript}\"\n\n{response}", parse_mode="Markdown", disable_web_page_preview=True)
+        except Exception as e:
+            logger.exception(f"voice_handler failed: {e}")
+            await edit_status(status_msg, f"❌ Voice error: {e}")
+
     # Register handlers
     app.add_handler(MessageHandler(filters.COMMAND, cmd_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, freeform_handler))
+    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, voice_handler))
     app.add_error_handler(error_handler)
 
     # Run

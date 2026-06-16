@@ -27,7 +27,9 @@ logger = logging.getLogger(__name__)
 
 
 HELP_TEXT = (
-    "*Ọniṣọwọ́ — chat-first trading bot*\n\n"
+    "*Àkànjí Oníṣòwò — The Trader*\n\n"
+    "Àkànjí is a seasoned Yoruba trader. The bot carries his mind.\n"
+    "Just send a message — I interpret and act.\n\n"
     "Just send a message. I interpret and act.\n\n"
     "*Try typing:*\n"
     "• `buy 2 SOL` — buy $2 of SOL\n"
@@ -39,7 +41,7 @@ HELP_TEXT = (
     "• `show my balance` / `my positions` — read-only queries\n"
     "• `start the strategist` — autonomous mode on a loop\n\n"
     "*Slash commands still work:*\n"
-    "*/start* / */help* / */about* / */status* / */balance*\n"
+    "*/start* / */intro* / */help* / */about* / */status* / */balance*\n"
     "*/price* / */buy* / */sell* / */analyze* / */proceed*\n"
     "*/autotrade* / */strategist* / */strategy* / */positions*\n"
     "*/skills* / */skill* / */journal* / */review* / */reflect*\n"
@@ -93,7 +95,7 @@ def parse_command_args(text: str) -> tuple[str, dict]:
     if cmd in ("start", "help", "about", "status", "balance", "skills", "journal",
                "review", "reflect", "memory", "risk", "release", "settings", "pnl",
                "llm", "llms", "time", "abort", "strategy", "positions",
-               "analyze", "autotrade", "proceed"):
+               "analyze", "autotrade", "proceed", "intro"):
         return (cmd, {})
 
     if cmd == "strategist":
@@ -124,6 +126,7 @@ def run_bot(token: Optional[str] = None):
         from telegram import BotCommand
         commands = [
             BotCommand("start", "Ọniṣọwọ́ greeting"),
+            BotCommand("intro", "read Àkànjí's origin story"),
             BotCommand("help", "all commands"),
             BotCommand("about", "about this bot"),
             BotCommand("status", "portfolio + balance"),

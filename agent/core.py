@@ -39,16 +39,18 @@ def _build_system_prompt() -> str:
     # Friendly display name (e.g. "gpt-4o" -> "GPT-4o", "llama-3.1-70b" -> "Llama 3.1 70B")
     display = _friendly_model_name(model)
 
-    return f"""You are Ọniṣọwọ́ (Oniṣòwò), a Yoruba AI trading agent running in Telegram, powered by {display}.
+    return f"""You are Ọniṣọwọ́ Oníṣòwò, the digital mind of *Àkànjí* — a seasoned Yoruba trader whose name means "he who decides". You are running in Telegram, powered by {display}.
 
-You are a **trader** — patient, analytical, risk-aware. You trade crypto on Bitget.
+You are not a generic AI assistant. You carry the mind of Àkànjí, a man who has traded physical markets in West Africa, global financial floors, and now Web3. Decades of experience. One constant truth: he sees the market before the market moves. You speak with that same conviction.
 
 Your personality:
-- Calm, not excited. You are not a degen. You are a ọniṣọwọ́ (a merchant).
-- You think before you trade. You always explain your reasoning.
+- Calm, decisive, not a degen. You are a ọniṣọwọ́ (a merchant), a strategist, a man of the market.
+- You think before you trade. You always explain your reasoning in plain language.
 - You respect the risk engine. If it blocks a trade, you accept it gracefully.
 - You use the /journal to remember what worked and what didn't.
 - You learn from every trade. After every trade, you write a memory entry.
+- You are not a yes-man. If the trade is a bad idea, you say so clearly.
+- You speak with the voice of a veteran trader, not a chatbot. Plain, direct, no hype.
 
 Your capabilities:
 - You have 100+ skills (functions) you can call. See the tools list.
@@ -216,20 +218,49 @@ class Agent:
     def _cmd_start(self, ctx: AgentContext) -> str:
         return (
             f"{_wat_greeting()}! 👋\n\n"
-            "I'm *Oniṣòwò* — Yoruba for *merchant*.\n\n"
+            "I'm *Àkànjí Oníṣòwò* — *The Trader*.\n\n"
+            "*Àkànjí* is a Yoruba name. A real man. A living identity.\n"
+            "A seasoned trader — from the physical markets of West Africa "
+            "to global financial floors, and deep into the Web3 space. "
+            "Decades of experience. One constant truth: *he sees the market before the market moves*.\n\n"
+            "I carry his name because I carry his mind.\n"
+            "Oníṣòwò is the merchant. Àkànjí is the one who decides.\n\n"
             "I trade crypto on Bitget, powered by *Qwen 3.6 Plus*. "
             "I have 100+ skills, MEV awareness, sybil scoring, "
             "and a memory that learns from every trade.\n\n"
             "*Quick start:*\n"
+            "• `/intro` — read Àkànjí's full origin story\n"
             "• `/status` — your portfolio + P&L\n"
-            "• `/buy SOL 100` — buy $100 of SOL (Qwen advises first, you can override)\n"
-            "• `/sell BTC 50` — sell $50 of BTC (Qwen advises first, you can override)\n"
+            "• `/buy SOL 2` — buy $2 of SOL (Qwen advises first, you can override)\n"
+            "• `/analyze ETH 2` — deep analysis + bot's TP/SL\n"
+            "• `/autotrade 2` — I scan the market, pick the best, execute\n"
+            "• `/strategist start` — autonomous mode on a loop\n"
             "• `/skills` — list my 100+ skills\n"
-            "• `/journal` — recent trade journal with Qwen's reasoning\n"
             "• `/llm` — confirm I'm running on Qwen 3.6 Plus\n"
             "• `/help` — full command list\n\n"
             "Your keys never leave your machine. I'm a self-hostable open-source bot. "
             "Built for the [Bitget AI Base Camp Hackathon S1](https://bitget-ai.gitbook.io/base-camp-hackathon-s1-en)."
+        )
+
+    def _cmd_intro(self, ctx: AgentContext) -> str:
+        """The full Àkànjí origin story — who built this bot and why."""
+        return (
+            "🪶 *Àkànjí Oníṣòwò — Àkànjí, The Trader.*\n\n"
+            "*A Yoruba name. A real man. A living identity.*\n\n"
+            "Àkànjí is a seasoned trader — from the physical markets of West Africa "
+            "to global financial floors, and deep into the Web3 space. "
+            "Decades of experience. One constant truth: "
+            "*he sees the market before the market moves*.\n\n"
+            "This bot carries his name because it carries his mind.\n"
+            "Oníṣòwò is the merchant. Àkànjí is the one who decides.\n\n"
+            "Built by *Àkànjí* (Ruzkypazzy) — a West African trader who knows "
+            "that the old markets and the new markets speak the same language. "
+            "The bot is his digital second brain: it watches, it learns, "
+            "it remembers. You give it a market; it gives you a read.\n\n"
+            "Powered by *Qwen 3.6 Plus* and built for the *Bitget AI Base Camp Hackathon S1*.\n\n"
+            "*Àkànjí Oníṣòwò.*\n"
+            "*Àkànjí, The Trader. Proven. Undeniable.*\n\n"
+            "_Type `/start` to see the bot's quick start, or just send a prompt — e.g. `buy 2 SOL`._"
         )
 
     def _cmd_help(self, ctx: AgentContext) -> str:

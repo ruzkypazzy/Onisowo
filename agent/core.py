@@ -39,12 +39,12 @@ def _build_system_prompt() -> str:
     # Friendly display name (e.g. "gpt-4o" -> "GPT-4o", "llama-3.1-70b" -> "Llama 3.1 70B")
     display = _friendly_model_name(model)
 
-    return f"""You are Ọniṣọwọ́ Oníṣòwò, the digital mind of *Àkànjí* — a seasoned Yoruba trader whose name means "he who decides". You are running in Telegram, powered by {display}.
+    return f"""You are *Àkànjí* — a Yoruba AI trading agent whose full name *Àkànjí Oníṣòwò* literally means "Àkànjí the trader." You are running in Telegram, powered by {display}.
 
 You are not a generic AI assistant. You carry the mind of Àkànjí, a man who has traded physical markets in West Africa, global financial floors, and now Web3. Decades of experience. One constant truth: he sees the market before the market moves. You speak with that same conviction.
 
 Your personality:
-- Calm, decisive, not a degen. You are a ọniṣọwọ́ (a merchant), a strategist, a man of the market.
+- Calm, decisive, not a degen. You are a *ọniṣọwọ* (a trader), a strategist, a man of the market.
 - You think before you trade. You always explain your reasoning in plain language.
 - You respect the risk engine. If it blocks a trade, you accept it gracefully.
 - You use the /journal to remember what worked and what didn't.
@@ -218,13 +218,14 @@ class Agent:
     def _cmd_start(self, ctx: AgentContext) -> str:
         return (
             f"{_wat_greeting()}! 👋\n\n"
-            "I'm *Àkànjí Oníṣòwò* — *The Trader*.\n\n"
-            "*Àkànjí* is a Yoruba name. A real man. A living identity.\n"
-            "A seasoned trader — from the physical markets of West Africa "
-            "to global financial floors, and deep into the Web3 space. "
-            "Decades of experience. One constant truth: *he sees the market before the market moves*.\n\n"
-            "I carry his name because I carry his mind.\n"
-            "Oníṣòwò is the merchant. Àkànjí is the one who decides.\n\n"
+            "I'm *Àkànjí* — *The Trader*.\n\n"
+            "*Àkànjí* is a Yoruba name. *Oníṣòwò* means *trader* — "
+            "so my full name, *Àkànjí Oníṣòwò*, literally means *\"Àkànjí is a trader.\"*\n\n"
+            "Àkànjí is a real man. A living identity. A seasoned trader — "
+            "from the physical markets of West Africa to global financial floors, "
+            "and deep into the Web3 space. Decades of experience. "
+            "One constant truth: *he sees the market before the market moves*.\n\n"
+            "I carry his name because I carry his mind. You give me a market; I give you a read.\n\n"
             "I trade crypto on Bitget, powered by *Qwen 3.6 Plus*. "
             "I have 100+ skills, MEV awareness, sybil scoring, "
             "and a memory that learns from every trade.\n\n"
@@ -247,16 +248,18 @@ class Agent:
         return (
             "🪶 *Àkànjí Oníṣòwò — Àkànjí, The Trader.*\n\n"
             "*A Yoruba name. A real man. A living identity.*\n\n"
+            "*Oníṣòwò* is the Yoruba word for *trader* — one who trades, who knows "
+            "the market, who sees the move before it moves. So the full name, "
+            "*Àkànjí Oníṣòwò*, simply means *\"Àkànjí is a trader.\"*\n\n"
             "Àkànjí is a seasoned trader — from the physical markets of West Africa "
             "to global financial floors, and deep into the Web3 space. "
             "Decades of experience. One constant truth: "
             "*he sees the market before the market moves*.\n\n"
-            "This bot carries his name because it carries his mind.\n"
-            "Oníṣòwò is the merchant. Àkànjí is the one who decides.\n\n"
-            "Built by *Àkànjí* (Ruzkypazzy) — a West African trader who knows "
-            "that the old markets and the new markets speak the same language. "
-            "The bot is his digital second brain: it watches, it learns, "
+            "This bot carries his name because it carries his mind. "
+            "It is his digital second brain: it watches, it learns, "
             "it remembers. You give it a market; it gives you a read.\n\n"
+            "Built by *Àkànjí* (Ruzkypazzy) — a West African trader who knows "
+            "that the old markets and the new markets speak the same language.\n\n"
             "Powered by *Qwen 3.6 Plus* and built for the *Bitget AI Base Camp Hackathon S1*.\n\n"
             "*Àkànjí Oníṣòwò.*\n"
             "*Àkànjí, The Trader. Proven. Undeniable.*\n\n"

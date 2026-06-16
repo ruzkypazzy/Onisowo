@@ -27,8 +27,8 @@ logger = logging.getLogger(__name__)
 
 
 HELP_TEXT = (
-    "*Àkànjí Oníṣòwò — The Trader*\n\n"
-    "Àkànjí is a seasoned Yoruba trader. The bot carries his mind.\n"
+    "*Àkànjí Oníṣòwò — Àkànjí, The Trader*\n\n"
+    "“Àkànjí Oníṣòwò” literally means *“Àkànjí is a trader.”* The bot carries his mind.\n"
     "Just send a message — I interpret and act.\n\n"
     "Just send a message. I interpret and act.\n\n"
     "*Try typing:*\n"
@@ -125,7 +125,7 @@ def run_bot(token: Optional[str] = None):
     async def _post_init(app):
         from telegram import BotCommand
         commands = [
-            BotCommand("start", "Ọniṣọwọ́ greeting"),
+            BotCommand("start", "Àkànjí greeting"),
             BotCommand("intro", "read Àkànjí's origin story"),
             BotCommand("help", "all commands"),
             BotCommand("about", "about this bot"),

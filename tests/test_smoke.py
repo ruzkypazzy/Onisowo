@@ -808,6 +808,68 @@ class TestWATGreeting(unittest.TestCase):
             self.assertNotIn(unknown, symbols, f"Unknown short ticker {unknown} must be filtered out")
         print(f"  ✓ universe_scan: filtered all R-prefix stocks, ON-suffix stocks, long uppercase stocks, stables, unknown short tickers (candidates: {symbols})")
 
+    def test_format_market_scan_renders_pairs(self):
+        """_format_market_scan: never returns just 'Done.' — always shows real crypto pairs."""
+        from agent.core import Agent
+        os.environ.setdefault("BITGET_API_KEY", "test")
+        os.environ.setdefault("BITGET_SECRET_KEY", "test")
+        os.environ.setdefault("BITGET_PASSPHRASE", "test")
+        os.environ.setdefault("BITGET_QWEN_API_KEY", "test")
+        from unittest.mock import MagicMock
+        agent = Agent()
+        agent.bitget = MagicMock()
+        agent.qwen = MagicMock()
+
+        # Case 1: Empty candidates → informative message, not "Done."
+        rendered = agent._format_market_scan(
+            {"ok": True, "candidates": []},
+            "Analyze the market and suggest a pair"
+        )
+        self.assertNotEqual(rendered.strip(), "Done.")
+        self.assertIn("no qualified", rendered.lower())
+
+        # Case 2: Real candidates → top 5 rendered with real symbols
+        rendered = agent._format_market_scan(
+            {
+                "ok": True,
+                "candidates": [
+                    {"symbol": "BTCUSDT", "composite": 0.75, "current_price": 65000, "change_24h_pct": 0.5, "volume_24h": 100_000_000},
+                    {"symbol": "SOLUSDT", "composite": 0.68, "current_price": 150, "change_24h_pct": 1.2, "volume_24h": 50_000_000},
+                    {"symbol": "ETHUSDT", "composite": 0.62, "current_price": 3000, "change_24h_pct": 0.3, "volume_24h": 80_000_000},
+                ]
+            },
+            "What's the best pair to trade?"
+        )
+        self.assertNotEqual(rendered.strip(), "Done.")
+        self.assertIn("BTCUSDT", rendered)
+        self.assertIn("SOLUSDT", rendered)
+        self.assertIn("ETHUSDT", rendered)
+
+        # Case 3: ok=False → error message
+        rendered = agent._format_market_scan(
+            {"ok": False, "error": "No tradeable candidates"},
+            "Analyze the market"
+        )
+        self.assertIn("Scan failed", rendered)
+
+        # Case 4: ranked (find_best_trade format)
+        rendered = agent._format_market_scan(
+            {
+                "ok": True,
+                "ranked": [
+                    {"symbol": "BTCUSDT", "composite": 0.75, "current_price": 65000, "change_24h_pct": 0.5, "volume_24h": 100_000_000},
+                ],
+                "qwen_pick": "BTCUSDT",
+                "qwen_confidence": 0.85,
+                "qwen_reasoning": "Bitcoin is showing strength above 65k"
+            },
+            "Suggest a pair"
+        )
+        self.assertIn("BTCUSDT", rendered)
+        self.assertIn("Bot pick", rendered)
+
+        print(f"  ✓ _format_market_scan: empty/ranked/ok/error cases all render real content")
+
 if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("  Ọniṣọwọ́ — Smoke tests")

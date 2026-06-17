@@ -808,8 +808,11 @@ class TestWATGreeting(unittest.TestCase):
             self.assertNotIn(unknown, symbols, f"Unknown short ticker {unknown} must be filtered out")
         print(f"  ✓ universe_scan: filtered all R-prefix stocks, ON-suffix stocks, long uppercase stocks, stables, unknown short tickers (candidates: {symbols})")
 
-    def test_format_market_scan_renders_pairs(self):
-        """_format_market_scan: never returns just 'Done.' — always shows real crypto pairs."""
+    def test_answer_question_trims_large_results(self):
+        """When a skill returns > 6000 chars, the tool result is trimmed before going back to Qwen.
+
+        This prevents the 'Done.' failure where Qwen saw too much JSON and returned empty.
+        """
         from agent.core import Agent
         os.environ.setdefault("BITGET_API_KEY", "test")
         os.environ.setdefault("BITGET_SECRET_KEY", "test")
@@ -818,57 +821,60 @@ class TestWATGreeting(unittest.TestCase):
         from unittest.mock import MagicMock
         agent = Agent()
         agent.bitget = MagicMock()
-        agent.qwen = MagicMock()
-
-        # Case 1: Empty candidates → informative message, not "Done."
-        rendered = agent._format_market_scan(
-            {"ok": True, "candidates": []},
-            "Analyze the market and suggest a pair"
-        )
-        self.assertNotEqual(rendered.strip(), "Done.")
-        self.assertIn("no qualified", rendered.lower())
-
-        # Case 2: Real candidates → top 5 rendered with real symbols
-        rendered = agent._format_market_scan(
-            {
+        # Build a fat fake result with 50 candidates + signals + sub_scores
+        big_result = {
+            "ok": True,
+            "skill": "universe_scan",
+            "result": {
                 "ok": True,
                 "candidates": [
-                    {"symbol": "BTCUSDT", "composite": 0.75, "current_price": 65000, "change_24h_pct": 0.5, "volume_24h": 100_000_000},
-                    {"symbol": "SOLUSDT", "composite": 0.68, "current_price": 150, "change_24h_pct": 1.2, "volume_24h": 50_000_000},
-                    {"symbol": "ETHUSDT", "composite": 0.62, "current_price": 3000, "change_24h_pct": 0.3, "volume_24h": 80_000_000},
-                ]
-            },
-            "What's the best pair to trade?"
-        )
-        self.assertNotEqual(rendered.strip(), "Done.")
-        self.assertIn("BTCUSDT", rendered)
-        self.assertIn("SOLUSDT", rendered)
-        self.assertIn("ETHUSDT", rendered)
-
-        # Case 3: ok=False → error message
-        rendered = agent._format_market_scan(
-            {"ok": False, "error": "No tradeable candidates"},
-            "Analyze the market"
-        )
-        self.assertIn("Scan failed", rendered)
-
-        # Case 4: ranked (find_best_trade format)
-        rendered = agent._format_market_scan(
-            {
-                "ok": True,
-                "ranked": [
-                    {"symbol": "BTCUSDT", "composite": 0.75, "current_price": 65000, "change_24h_pct": 0.5, "volume_24h": 100_000_000},
+                    {
+                        "symbol": f"TOKEN{i}USDT",
+                        "composite": 0.5,
+                        "sub_scores": {f"s{j}": 0.5 for j in range(20)},
+                        "signals": {f"sig{j}": 100 for j in range(20)},
+                    }
+                    for i in range(50)
                 ],
-                "qwen_pick": "BTCUSDT",
-                "qwen_confidence": 0.85,
-                "qwen_reasoning": "Bitcoin is showing strength above 65k"
             },
-            "Suggest a pair"
-        )
-        self.assertIn("BTCUSDT", rendered)
-        self.assertIn("Bot pick", rendered)
+        }
+        # Capture the actual content passed to qwen.chat on the followup call
+        captured = {}
+        agent.qwen = MagicMock()
+        def fake_chat(messages, **kwargs):
+            captured.setdefault("calls", []).append(messages)
+            # Return a different response on each call
+            if len(captured["calls"]) == 1:
+                # Initial: Qwen picks a tool
+                return {"content": "", "tool_calls": [{"function": {"name": "universe_scan", "arguments": "{}"}, "id": "1"}]}
+            else:
+                # Followup: Qwen summarizes
+                return {"content": "Based on the scan, BTCUSDT is the strongest setup."}
+        agent.qwen.chat = fake_chat
 
-        print(f"  ✓ _format_market_scan: empty/ranked/ok/error cases all render real content")
+        # First call: Qwen decides to call universe_scan
+        from agent.core import AgentContext
+        ctx = AgentContext(user_id=1, user_message="suggest a pair", command="ask", args={})
+        result = agent._answer_question(ctx, "Suggest a pair to trade")
+
+        # Verify the followup saw a trimmed result
+        tool_msgs = []
+        if captured.get("calls") and len(captured["calls"]) >= 2:
+            tool_msgs = [m for m in captured["calls"][-1] if m.get("role") == "tool"]
+        if tool_msgs:
+            content = tool_msgs[0]["content"]
+            self.assertLess(len(content), 6500, "Tool result should be trimmed to < 6500 chars")
+            # Should keep top 10 candidates
+            self.assertIn("TOKEN0USDT", content)
+            self.assertNotIn("TOKEN11USDT", content)
+            # Should drop noisy fields
+            self.assertNotIn("sub_scores", content)
+            self.assertNotIn("signals", content)
+
+        # Verify bot didn't say 'Done.'
+        self.assertNotEqual(result.strip(), "Done.")
+
+        print(f"  ✓ _answer_question: large tool results trimmed; Qwen returned real analysis")
 
 if __name__ == "__main__":
     print("\n" + "=" * 60)

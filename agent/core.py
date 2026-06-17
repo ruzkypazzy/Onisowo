@@ -1333,60 +1333,6 @@ class Agent:
             logger.exception(f"_cmd_ask failed: {e}")
             return f"❌ Error processing your request: {e}"
 
-    def _format_market_scan(self, result: dict, user_text: str) -> str:
-        """Format a market scan / find_best_trade result into a Telegram-friendly message.
-
-        Always shows real crypto pairs (or an honest 'no good setups' message).
-        Never returns just 'Done.' or empty.
-        """
-        if not isinstance(result, dict):
-            return ""
-        if not result.get("ok"):
-            err = result.get("error", "unknown error")
-            return f"❌ Scan failed: {err}\n\nTry `/analyze SYMBOL USDT` for a specific coin, or `/universe` to see the full crypto board."
-
-        # Two shapes: universe_scan returns {candidates: [...]}
-        # find_best_trade returns {ranked: [...], qwen_pick, ...}
-        candidates = result.get("candidates") or result.get("ranked") or []
-        if not candidates:
-            return (
-                "🔍 *Market scan complete — no qualified setups.*\n\n"
-                "The scanner ran across the full board and found no crypto pairs that meet "
-                "the current criteria. This usually means the market is flat, choppy, or "
-                "all the high-volume names are stocks/leveraged tokens we filter out.\n\n"
-                "→ Try `/analyze BTC 2` or `/analyze SOL 2` to drill into a specific pair\n"
-                "→ Try `/universe` to see the current top 20 crypto pairs by volume\n"
-                "→ Wait for cleaner market structure before going long"
-            )
-
-        # Render top candidates
-        lines = ["🔍 *Market scan — top crypto pairs by composite score*\n"]
-        # Add Qwen's pick if present
-        if result.get("qwen_pick") and result["qwen_pick"] != "SKIP":
-            lines.append(f"🤖 *Bot pick:* *{result['qwen_pick']}* (confidence {result.get('qwen_confidence', 0):.2f})")
-            reasoning = result.get("qwen_reasoning", "")
-            if reasoning:
-                lines.append(f"   _{reasoning[:200]}_")
-            lines.append("")
-
-        lines.append(f"📊 *Top {min(len(candidates), 5)} candidates:*")
-        medals = ["🥇", "🥈", "🥉", " 4️⃣", " 5️⃣"]
-        for i, c in enumerate(candidates[:5], 1):
-            sym = c.get("symbol", "?")
-            comp = c.get("composite", 0)
-            price = c.get("current_price", c.get("last_price", 0))
-            ch = c.get("change_24h_pct", 0)
-            vol = c.get("volume_24h", c.get("volume_24h_usd", 0))
-            medal = medals[i-1] if i <= len(medals) else f" {i}."
-            ch_str = f"{ch:+.2f}%" if ch else "n/a"
-            vol_str = f"${vol/1_000_000:.1f}M" if vol >= 1_000_000 else f"${vol/1_000:.1f}K"
-            lines.append(f"{medal} *{sym}* — score {comp:.2f} • ${price:,.4f} • 24h {ch_str} • vol {vol_str}")
-
-        lines.append("")
-        lines.append("→ `/analyze SYMBOL 2` to drill into any pair")
-        lines.append("→ `/autotrade 2` to let the bot pick + execute (safety net ON)")
-        return "\n".join(lines)
-
     def _extract_trade_intent(self, text: str) -> Optional[dict]:
         """Extract a trade intent from free-form text.
 
@@ -1515,7 +1461,13 @@ class Agent:
                 f"Current context:\n"
                 f"- USDT balance: ${balance:.2f}\n"
                 f"- Portfolio value: ${portfolio:.2f}\n"
-                f"- User said: {text}\n"
+                f"- User said: {text}\n\n"
+                f"When you write your final reply, reason naturally in your own voice. "
+                f"Don't just say 'Done' — write a full analysis in conversational English. "
+                f"Reference real numbers, real tickers, and explain WHY you'd pick or skip a setup. "
+                f"You can show multiple candidates (top 10-20 if relevant). "
+                f"Always cite the actual crypto pair symbols (BTCUSDT, SOLUSDT, ETHUSDT, etc.), "
+                f"never invent tickers, and never return a one-word answer to a substantive question."
             )
             skills_descriptions = self.skills.get_skill_descriptions()
             tools = self.skills.get_tool_schemas()
@@ -1549,44 +1501,35 @@ class Agent:
                 except Exception:
                     skill_args = {}
                 result = self.skills.invoke(skill_name, skill_args)
-                # Unwrap the skill result envelope so we can render it directly when useful.
-                inner = result.get("result", result) if isinstance(result, dict) else result
 
-                # Special-case: if the user asked for a market scan / pair suggestion and
-                # we got universe_scan or find_best_trade back, format the candidates
-                # directly so the user always sees real crypto pairs — not a terse
-                # followup from Qwen that says "Done.".
-                user_asked_for_picks = any(
-                    kw in text.lower()
-                    for kw in ["pair to trade", "pairs to trade", "what to trade",
-                               "suggest a pair", "analyze the market", "scan the market",
-                               "market scan", "find a trade", "best trade"]
-                )
-                if user_asked_for_picks and skill_name in ("universe_scan", "find_best_trade"):
-                    rendered = self._format_market_scan(inner, text)
-                    if rendered:
-                        # Still journal this exchange so memory works
-                        try:
-                            self.db.add_memory(
-                                "conversation",
-                                f"User asked: '{text[:200]}'. I replied: '{rendered[:300]}'",
-                                tags=["chat", "market_scan"],
-                                importance=4,
-                            )
-                        except Exception:
-                            pass
-                        return rendered
+                # Trim large results (e.g. universe_scan returns 50+ candidates)
+                # to keep Qwen's context window manageable and force it to summarize.
+                result_str = json.dumps(result, default=str)
+                if len(result_str) > 6000:
+                    # Keep the structure but trim large lists to top 10 items, drop
+                    # noisy fields like 'signals' and 'sub_scores' which Qwen doesn't
+                    # need for a natural-language summary.
+                    if isinstance(result, dict) and "result" in result and isinstance(result["result"], dict):
+                        inner = result["result"]
+                        for key in ("candidates", "ranked"):
+                            if key in inner and isinstance(inner[key], list) and len(inner[key]) > 10:
+                                inner[key] = inner[key][:10]
+                        for item in inner.get("candidates", []) + inner.get("ranked", []):
+                            if isinstance(item, dict):
+                                item.pop("signals", None)
+                                item.pop("sub_scores", None)
+                        result_str = json.dumps(result, default=str)
 
                 followup = self.qwen.chat(
                     messages=[
                         {"role": "system", "content": SYSTEM_PROMPT},
                         {"role": "user", "content": text},
                         {"role": "assistant", "content": resp["content"] or "(invoking skill)"},
-                        {"role": "tool", "tool_call_id": tool_call.get("id", "1"), "name": skill_name, "content": json.dumps(result)},
+                        {"role": "tool", "tool_call_id": tool_call.get("id", "1"), "name": skill_name, "content": result_str},
                     ],
-                    max_tokens=1000,
+                    max_tokens=1500,
                 )
-                return followup["content"] or f"✓ Done. ({skill_name})"
+                return followup["content"] or f"✓ {skill_name} ran successfully but the summary came back empty. Ask me to drill into a specific pair."
 
             # Remember this exchange so the bot has continuity next time
             try:

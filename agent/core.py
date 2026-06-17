@@ -17,6 +17,7 @@ import re
 import json
 import logging
 import time
+import subprocess
 from typing import Any, Optional
 from dataclasses import dataclass
 
@@ -1017,6 +1018,115 @@ class Agent:
             f"Period: *{period}*\n\n"
             f"Greeting I'd use: *{_wat_greeting()}*\n\n"
             f"_WAT = West Africa Time (UTC+1). All my greetings and timestamps use WAT so they match the local time of my target users._"
+        )
+
+    def _cmd_control(self, ctx: AgentContext) -> str:
+        """Inspect and control the running bot instance from inside Telegram.
+        Usage: /control status | /control restart | /control stop | /control logs
+        Requires the bot to be running as a systemd service. Falls back to a
+        process-list view if systemd isn't available.
+        """
+        msg = (ctx.user_message or "").strip()
+        # Pull the subcommand from the message
+        import re as _re
+        m = _re.match(r"^/control\s*(\w+)?", msg, _re.IGNORECASE)
+        sub = (m.group(1) or "status").lower() if m else "status"
+
+        # Detect systemd
+        has_systemd = os.path.exists("/etc/systemd/system/akanji.service")
+        if not has_systemd:
+            # Fall back: show process info via psutil/pgrep
+            try:
+                import subprocess
+                p = subprocess.run(
+                    ["pgrep", "-af", "python main.py"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                out = p.stdout.strip() or "  (no python main.py process found)"
+                if sub in ("stop", "restart"):
+                    return (
+                        f"⚠️  This bot isn't running as a systemd service.\n"
+                        f"Bot process(es):\n{out}\n\n"
+                        f"To stop, run: `pkill -f 'python main.py'`\n"
+                        f"To run as a service: `bash init.sh` (re-run the installer)"
+                    )
+                return (
+                    f"🤖 *Bot status (no systemd)*\n\n"
+                    f"Process:\n{out}\n\n"
+                    f"Install as a service: re-run `bash init.sh` for auto-restart + auto-start on boot."
+                )
+            except Exception as e:
+                return f"❌ Couldn't check bot status: {e}"
+
+        if sub == "status":
+            try:
+                out = subprocess.run(
+                    ["systemctl", "is-active", "akanji"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                state = out.stdout.strip() or "unknown"
+                pid = subprocess.run(
+                    ["systemctl", "show", "akanji", "-p", "MainPID", "--value"],
+                    capture_output=True, text=True, timeout=5,
+                ).stdout.strip()
+                since = subprocess.run(
+                    ["systemctl", "show", "akanji", "-p", "ActiveEnterTimestamp", "--value"],
+                    capture_output=True, text=True, timeout=5,
+                ).stdout.strip()
+                return (
+                    f"🤖 *Bot status*\n\n"
+                    f"State: *{state}*\n"
+                    f"PID: `{pid}`\n"
+                    f"Active since: `{since}`\n\n"
+                    f"Commands: `/control restart` · `/control stop` · `/control logs`"
+                )
+            except Exception as e:
+                return f"❌ status failed: {e}"
+
+        if sub == "restart":
+            try:
+                subprocess.run(["systemctl", "restart", "akanji"], check=True, timeout=10)
+                return "🔁 Restarted. Use `/control status` to confirm."
+            except Exception as e:
+                return f"❌ restart failed: {e}"
+
+        if sub == "stop":
+            try:
+                subprocess.run(["systemctl", "stop", "akanji"], check=True, timeout=10)
+                return "🛑 Stopped. Use `/control start` to bring it back."
+            except Exception as e:
+                return f"❌ stop failed: {e}"
+
+        if sub == "start":
+            try:
+                subprocess.run(["systemctl", "start", "akanji"], check=True, timeout=10)
+                return "▶️ Started."
+            except Exception as e:
+                return f"❌ start failed: {e}"
+
+        if sub == "logs":
+            try:
+                out = subprocess.run(
+                    ["journalctl", "-u", "akanji", "-n", "30", "--no-pager"],
+                    capture_output=True, text=True, timeout=10,
+                )
+                tail = out.stdout.strip() or "(no logs yet)"
+                if len(tail) > 3500:
+                    tail = "...(truncated)...\n" + tail[-3500:]
+                return f"📜 *Last 30 log lines*\n\n```\n{tail}\n```"
+            except Exception as e:
+                return f"❌ logs failed: {e}"
+
+        if sub in ("enable", "disable"):
+            try:
+                subprocess.run(["systemctl", sub, "akanji"], check=True, timeout=10)
+                return f"✅ {sub}d. The service will{' not' if sub == 'disable' else ''} start on boot."
+            except Exception as e:
+                return f"❌ {sub} failed: {e}"
+
+        return (
+            f"Unknown subcommand: `{sub}`\n\n"
+            f"Usage: `/control status|restart|start|stop|logs|enable|disable`"
         )
 
     def _cmd_settings(self, ctx: AgentContext) -> str:

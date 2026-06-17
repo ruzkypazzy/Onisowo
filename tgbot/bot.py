@@ -95,7 +95,7 @@ def parse_command_args(text: str) -> tuple[str, dict]:
     if cmd in ("start", "help", "about", "status", "balance", "skills", "journal",
                "review", "reflect", "memory", "risk", "release", "settings", "pnl",
                "llm", "llms", "time", "abort", "strategy", "positions",
-               "analyze", "autotrade", "proceed", "intro"):
+               "analyze", "autotrade", "proceed", "intro", "control"):
         return (cmd, {})
 
     if cmd == "strategist":
@@ -150,6 +150,7 @@ def run_bot(token: Optional[str] = None):
             BotCommand("llm", "which LLM is powering me"),
             BotCommand("llms", "supported LLM providers"),
             BotCommand("time", "WAT time + Yoruba greeting"),
+            BotCommand("control", "status/restart/stop/logs of the bot itself"),
             BotCommand("risk", "risk engine state"),
             BotCommand("kill", "activate kill switch"),
             BotCommand("release", "release kill switch"),

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#1E1B4B" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Àkànjí" />
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="apple-touch-icon" href="/assets/profile_picture.png" />
+  <link rel="icon" type="image/png" href="/assets/brand_mark.png" />
+  <link rel="stylesheet" href="/app.css" />
+  <title>Àkànjí Oníṣòwò</title>
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <img src="/assets/profile_picture.png" alt="Àkànjí" class="avatar" />
+      <div class="title">
+        <h1>Àkànjí Oníṣòwò</h1>
+        <p id="greeting" class="greeting">Ọniṣọwọ́ ẹ káàlẹ́ òru 🌙</p>
+      </div>
+      <div class="status" id="status">
+        <span class="dot"></span>
+        <span class="label">Live</span>
+      </div>
+    </header>
+
+    <main id="chat" class="chat">
+      <div class="hero">
+        <img src="/assets/background_market_scene.png" alt="Àkànjí at the rice stall" class="hero-img" />
+        <div class="hero-overlay">
+          <h2>Oníṣòwò kànjú, ọ̀rẹ́ mi.</h2>
+          <p>I'm Àkànjí. The Trader. Tell me what you see in the market, or what you want to do. I'll show you what I see.</p>
+          <div class="quick-actions">
+            <button data-action="analyze">🔍 Analyze market</button>
+            <button data-action="balance">💰 My balance</button>
+            <button data-action="buy">📈 Buy a pair</button>
+            <button data-action="positions">📊 Open positions</button>
+            <button data-action="autotrade">🤖 Auto-trade $5</button>
+            <button data-action="skills">🧠 Show my skills</button>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <form id="composer" class="composer">
+      <textarea
+        id="input"
+        placeholder="Talk to Àkànjí… (Shift+Enter for newline)"
+        rows="1"
+        autocomplete="off"
+      ></textarea>
+      <button type="submit" id="send" aria-label="Send">
+        <svg viewBox="0 0 24 24" width="22" height="22">
+          <path fill="currentColor" d="M2 21l21-9L2 3v7l15 2-15 2z"/>
+        </svg>
+      </button>
+    </form>
+  </div>
+
+  <script src="/app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    }
+  </script>
+</body>
+</html>

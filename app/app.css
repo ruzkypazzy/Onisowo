@@ -1,0 +1,316 @@
+/* Àkànjí Oníṣòwò — mobile-first PWA styles
+   Palette: deep indigo bg, warm gold accents, cream text, market-scene photo.
+   Yoruba energy, Nigerian market vibe, clean modern chat UX. */
+
+:root {
+  --bg: #1E1B4B;          /* deep indigo */
+  --bg-2: #2D2A5C;        /* lighter indigo for cards */
+  --bg-3: #3B3870;        /* elevated */
+  --gold: #D4A24C;        /* warm gold */
+  --gold-2: #E8C271;      /* lighter gold */
+  --cream: #F5E6C8;       /* cream / off-white */
+  --text: #F5E6C8;
+  --text-dim: #B5AEC8;
+  --text-muted: #6E6890;
+  --user-bubble: linear-gradient(135deg, #D4A24C, #B6862F);
+  --bot-bubble: rgba(59, 56, 112, 0.65);
+  --border: rgba(212, 162, 76, 0.25);
+  --shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+  --radius: 18px;
+  --radius-sm: 12px;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
+
+body {
+  background:
+    radial-gradient(ellipse at top right, rgba(212, 162, 76, 0.10), transparent 60%),
+    radial-gradient(ellipse at bottom left, rgba(45, 42, 92, 0.6), transparent 60%),
+    var(--bg);
+  min-height: 100vh;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+/* ---------- Top bar ---------- */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  padding-top: max(14px, env(safe-area-inset-top));
+  background: linear-gradient(180deg, rgba(30, 27, 75, 0.95), rgba(30, 27, 75, 0.7));
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid var(--border);
+  z-index: 10;
+}
+
+.avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 2px solid var(--gold);
+  flex-shrink: 0;
+}
+
+.title { flex: 1; min-width: 0; }
+.title h1 {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--cream);
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+.greeting {
+  font-size: 12px;
+  color: var(--gold);
+  margin-top: 2px;
+  font-weight: 500;
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+  padding: 4px 10px;
+  background: rgba(212, 162, 76, 0.08);
+  border: 1px solid var(--border);
+  border-radius: 100px;
+}
+.status .dot {
+  width: 6px; height: 6px;
+  background: #4ade80;
+  border-radius: 50%;
+  box-shadow: 0 0 8px rgba(74, 222, 128, 0.6);
+  animation: pulse 2s infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+/* ---------- Chat area ---------- */
+
+.chat {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 0;
+}
+
+/* Hero / welcome card */
+.hero {
+  position: relative;
+  margin: 16px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow);
+}
+
+.hero-img {
+  width: 100%;
+  height: 320px;
+  object-fit: cover;
+  display: block;
+  filter: brightness(0.7) saturate(1.1);
+}
+
+.hero-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 20px;
+  background: linear-gradient(180deg, transparent 0%, rgba(30, 27, 75, 0.4) 40%, rgba(30, 27, 75, 0.95) 100%);
+}
+
+.hero-overlay h2 {
+  font-size: 20px;
+  color: var(--gold);
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+.hero-overlay p {
+  font-size: 14px;
+  color: var(--cream);
+  line-height: 1.5;
+  margin-bottom: 16px;
+}
+
+.quick-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.quick-actions button {
+  padding: 10px 12px;
+  background: rgba(30, 27, 75, 0.7);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--border);
+  color: var(--cream);
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s ease;
+}
+.quick-actions button:active {
+  transform: scale(0.97);
+  background: rgba(212, 162, 76, 0.15);
+  border-color: var(--gold);
+}
+
+/* Chat bubbles */
+.msg {
+  display: flex;
+  margin: 8px 16px;
+  gap: 8px;
+  align-items: flex-end;
+  animation: slideUp 0.25s ease;
+}
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.msg.user { flex-direction: row-reverse; }
+
+.msg .bubble {
+  max-width: 80%;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  font-size: 14px;
+  line-height: 1.5;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+  box-shadow: var(--shadow);
+}
+.msg.user .bubble {
+  background: var(--user-bubble);
+  color: #1E1B4B;
+  font-weight: 500;
+  border-bottom-right-radius: 4px;
+}
+.msg.bot .bubble {
+  background: var(--bot-bubble);
+  color: var(--cream);
+  border: 1px solid var(--border);
+  border-bottom-left-radius: 4px;
+}
+.msg .mini-avatar {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+  border: 1px solid var(--gold);
+}
+
+.msg.bot .bubble b { color: var(--gold); }
+.msg.bot .bubble code {
+  background: rgba(0, 0, 0, 0.3);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 13px;
+}
+.msg.bot .bubble pre {
+  background: rgba(0, 0, 0, 0.3);
+  padding: 8px 10px;
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 12px;
+  margin: 6px 0;
+}
+
+.thinking {
+  display: flex;
+  gap: 4px;
+  padding: 4px 0;
+}
+.thinking span {
+  width: 6px; height: 6px;
+  background: var(--gold);
+  border-radius: 50%;
+  animation: bounce 1.2s infinite;
+}
+.thinking span:nth-child(2) { animation-delay: 0.15s; }
+.thinking span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
+
+/* ---------- Composer ---------- */
+
+.composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 12px;
+  padding-bottom: max(12px, env(safe-area-inset-bottom));
+  background: rgba(30, 27, 75, 0.85);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-top: 1px solid var(--border);
+}
+
+#input {
+  flex: 1;
+  resize: none;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  padding: 10px 16px;
+  color: var(--cream);
+  font-size: 15px;
+  font-family: inherit;
+  outline: none;
+  max-height: 120px;
+  line-height: 1.4;
+}
+#input::placeholder { color: var(--text-muted); }
+#input:focus { border-color: var(--gold); }
+
+#send {
+  width: 44px; height: 44px;
+  border-radius: 50%;
+  background: var(--gold);
+  color: var(--bg);
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+#send:active { transform: scale(0.92); }
+#send:disabled { opacity: 0.4; cursor: not-allowed; }
+
+@media (min-width: 720px) {
+  .chat { padding-bottom: 8px; }
+  .msg .bubble { font-size: 15px; }
+}

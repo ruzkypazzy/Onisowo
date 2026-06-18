@@ -43,6 +43,12 @@ else
     echo "→ No systemd service found (already uninstalled?)"
 fi
 
+# Remove the wrapper script (used when both telegram + mobile are running)
+if [ -f /usr/local/bin/akanji-run.sh ]; then
+    rm -f /usr/local/bin/akanji-run.sh
+    echo "  ✓ Removed /usr/local/bin/akanji-run.sh"
+fi
+
 # Remove install dir
 if [ $PURGE -eq 1 ] && [ $KEEP_DATA -eq 0 ]; then
     echo "→ Removing $INSTALL_DIR (purge mode)…"

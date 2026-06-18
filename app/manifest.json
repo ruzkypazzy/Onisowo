@@ -1,0 +1,32 @@
+{
+  "name": "Àkànjí Oníṣòwò",
+  "short_name": "Àkànjí",
+  "description": "AI Trading Agent — Yoruba Merchant Wisdom + Crypto",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1E1B4B",
+  "theme_color": "#D4A24C",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/assets/profile_picture.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/assets/brand_mark.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/assets/background_market_scene.png",
+      "sizes": "2752x1536",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ],
+  "categories": ["finance", "productivity"],
+  "lang": "en"
+}

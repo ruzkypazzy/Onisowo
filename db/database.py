@@ -82,6 +82,16 @@ class Database:
         value TEXT,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
+
+    -- User settings: per-user config keyed by (user_id, key)
+    -- Used for risk overrides, kill switch state, etc.
+    CREATE TABLE IF NOT EXISTS user_settings (
+        user_id INTEGER NOT NULL,
+        key TEXT NOT NULL,
+        value TEXT,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (user_id, key)
+    );
     """
 
     def __init__(self, db_path: Optional[str] = None):
@@ -342,5 +352,29 @@ class Database:
                    VALUES (?, ?, CURRENT_TIMESTAMP)
                    ON CONFLICT(key) DO UPDATE SET value = ?, updated_at = CURRENT_TIMESTAMP""",
                 (key, value, value),
+            )
+            conn.commit()
+
+    # -------------------------------------------------------------------------
+    # Per-user settings (risk overrides, etc.)
+    # -------------------------------------------------------------------------
+
+    def get_user_setting(self, user_id: int, key: str, default: Optional[str] = None) -> Optional[str]:
+        """Get a setting for a specific user. Used for per-user risk overrides."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT value FROM user_settings WHERE user_id = ? AND key = ?",
+                (user_id, key),
+            ).fetchone()
+            return row["value"] if row else default
+
+    def set_user_setting(self, user_id: int, key: str, value: str):
+        """Set a setting for a specific user. Used for per-user risk overrides."""
+        with self._conn() as conn:
+            conn.execute(
+                """INSERT INTO user_settings (user_id, key, value, updated_at)
+                   VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(user_id, key) DO UPDATE SET value = ?, updated_at = CURRENT_TIMESTAMP""",
+                (user_id, key, value, value),
             )
             conn.commit()

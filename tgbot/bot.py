@@ -102,6 +102,13 @@ def parse_command_args(text: str) -> tuple[str, dict]:
         # /strategist [start|stop|status|tick] — the agent unpacks the subcommand from user_message
         return (cmd, {"sub": rest.strip().lower().split()[0] if rest.strip() else ""})
 
+    if cmd == "settings":
+        # /settings [key [value]] — sub + rest of the args
+        parts2 = rest.split(maxsplit=1)
+        sub = parts2[0].lower() if parts2 else ""
+        rest2 = parts2[1].split() if len(parts2) > 1 else []
+        return (cmd, {"sub": sub, "rest": rest2})
+
     return ("ask", {"text": text})
 
 

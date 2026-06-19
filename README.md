@@ -94,7 +94,13 @@ Each skill is a **callable function** with input schema, output schema, and a do
 This is **YOUR** bot, running **YOUR** code, with **YOUR** API keys. Oniṣòwò:
 - **Never has access to your withdrawal permission** (you set Read+Trade only on the API key)
 - **Never stores your keys in a database** (they live in `.env`, owned by you)
-- **Cannot lose more than you allow** (default: max $2/trade, 30% drawdown kill switch — both configurable in `risk/config.py`)
+- **Cannot lose more than you allow** — all limits are **percentages of your balance**, not flat dollar amounts:
+  - Default: max 25% of balance per trade
+  - Default: max 75% of portfolio in one position
+  - Default: kill switch at 30% drawdown
+  - Default: 30% daily loss cap
+  - These scale automatically: a $10 account gets a $2.50 max trade; a $10,000 account gets a $2,500 max trade.
+  - Override per-user via `/settings max_trade_pct 50` (or any value 1–100).
 
 ## Hackathon submission
 

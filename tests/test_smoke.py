@@ -108,36 +108,42 @@ class TestSkillsRegistry(unittest.TestCase):
 
 
 class TestRiskEngine(unittest.TestCase):
-    """Verify the risk engine blocks dangerous orders."""
+    """Verify the risk engine blocks dangerous orders.
+
+    The engine is now percentage-based so the same config scales with any
+    account size. $10 account vs $10k account — same rules, different dollars.
+    """
 
     def test_blocks_oversized_trade(self):
         from risk.engine import RiskEngine, RiskConfig
         from db.database import Database
 
         db = Database(db_path=":memory:")
-        risk = RiskEngine(db=db, config=RiskConfig(max_trade_usd=2.0))
+        # Default max_trade_pct=0.25. Trade $40 of a $100 balance = 40%, blocked.
+        risk = RiskEngine(db=db, config=RiskConfig(max_trade_pct=0.25))
 
         allowed, reason = risk.check_order(
-            symbol="BTCUSDT", side="buy", size_usd=10.0,
+            symbol="BTCUSDT", side="buy", size_usd=40.0,
             portfolio_value_usd=100.0, open_positions_count=0,
         )
         self.assertFalse(allowed)
-        self.assertIn("exceeds max", reason)
-        print(f"  ✓ Blocked oversized trade (${10} > max ${2})")
+        self.assertIn("25%", reason)
+        print(f"  ✓ Blocked oversized trade ($40 = 40% > 25% cap)")
 
     def test_allows_normal_trade(self):
         from risk.engine import RiskEngine, RiskConfig
         from db.database import Database
 
         db = Database(db_path=":memory:")
-        risk = RiskEngine(db=db, config=RiskConfig(max_trade_usd=2.0))
+        # Trade $2 of a $100 balance = 2%, well under 25% cap.
+        risk = RiskEngine(db=db, config=RiskConfig(max_trade_pct=0.25))
 
         allowed, reason = risk.check_order(
-            symbol="SOLUSDT", side="buy", size_usd=1.0,
-            portfolio_value_usd=10.0, open_positions_count=0,
+            symbol="SOLUSDT", side="buy", size_usd=2.0,
+            portfolio_value_usd=100.0, open_positions_count=0,
         )
         self.assertTrue(allowed)
-        print(f"  ✓ Allowed normal trade (${1})")
+        print(f"  ✓ Allowed normal trade ($2 = 2% of $100, under 25% cap)")
 
     def test_blocks_kill_switch(self):
         from risk.engine import RiskEngine, RiskConfig
@@ -169,7 +175,9 @@ class TestRiskEngine(unittest.TestCase):
         from db.database import Database
 
         db = Database(db_path=":memory:")
-        risk = RiskEngine(db=db, config=RiskConfig(max_trade_usd=100, max_position_pct=0.4))
+        # max_trade_pct 50% allows this trade; max_position_pct 40% blocks it.
+        # Trade $5 of $10 balance = 50% trade, 50% position → position check fires.
+        risk = RiskEngine(db=db, config=RiskConfig(max_trade_pct=0.5, max_position_pct=0.4))
 
         allowed, reason = risk.check_order(
             symbol="SOLUSDT", side="buy", size_usd=5.0,
@@ -877,18 +885,19 @@ class TestWATGreeting(unittest.TestCase):
         print(f"  ✓ _answer_question: large tool results trimmed; Qwen returned real analysis")
 
     def test_suggest_position_size_respects_user_amount(self):
-        """suggest_position_size: respects user_requested_usd up to the config max."""
+        """suggest_position_size: respects user_requested_usd, caps at max_trade_pct of balance."""
         from risk.engine import RiskConfig, RiskEngine
-        cfg = RiskConfig(max_trade_usd=5.0, max_position_pct=0.75)
+        # 50% cap on a $10 balance → max $5
+        cfg = RiskConfig(max_trade_pct=0.50, max_position_pct=0.75)
         engine = RiskEngine(config=cfg)
-        # User asks for $10 but max is $5 → capped at $5
+        # User asks for $10 but max is $5 (50% of $10) → capped at $5
         result = engine.suggest_position_size(
             balance_usd=10.0,
             confidence=0.8,
             signal_score=0.7,
             user_requested_usd=10.0,
         )
-        self.assertEqual(result["size_usd"], 5.0, "Should cap at max_trade_usd=5.0")
+        self.assertEqual(result["size_usd"], 5.0, "Should cap at 50% of $10 = $5")
         # User asks for $3 (within max) → exact
         result = engine.suggest_position_size(
             balance_usd=10.0,
@@ -897,7 +906,7 @@ class TestWATGreeting(unittest.TestCase):
             user_requested_usd=3.0,
         )
         self.assertEqual(result["size_usd"], 3.0)
-        # No user amount: sized from confidence+signal
+        # No user amount: sized from confidence+signal, capped at max_trade_pct
         result = engine.suggest_position_size(
             balance_usd=10.0,
             confidence=0.9,
@@ -910,6 +919,23 @@ class TestWATGreeting(unittest.TestCase):
             balance_usd=0.4,  # too small to trade
         )
         self.assertEqual(result["size_usd"], 0)
+
+    def test_suggest_position_size_scales_with_balance(self):
+        """The new model scales with balance: same 25% cap → different dollar amounts."""
+        from risk.engine import RiskConfig, RiskEngine
+        cfg = RiskConfig(max_trade_pct=0.25)
+        engine = RiskEngine(config=cfg)
+        # $10 account → max trade $2.50
+        r10 = engine.suggest_position_size(balance_usd=10.0, confidence=1.0, signal_score=1.0)
+        # $1000 account → max trade $250
+        r1000 = engine.suggest_position_size(balance_usd=1000.0, confidence=1.0, signal_score=1.0)
+        # $10000 account → max trade $2500
+        r10000 = engine.suggest_position_size(balance_usd=10000.0, confidence=1.0, signal_score=1.0)
+        self.assertAlmostEqual(r10["size_usd"], 2.50, places=2)
+        self.assertAlmostEqual(r1000["size_usd"], 250.00, places=2)
+        self.assertAlmostEqual(r10000["size_usd"], 2500.00, places=2)
+        print(f"  ✓ suggest_position_size scales: $10→$2.50, $1k→$250, $10k→$2.5k (same 25% cap)")
+
         print(f"  ✓ suggest_position_size: respects user amount, caps at max, rejects too-small balance")
 
     def test_fuzzy_skill_match(self):

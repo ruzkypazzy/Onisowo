@@ -24,7 +24,14 @@ from dataclasses import dataclass
 from clients.bitget import BitgetClient, BitgetAPIError
 from clients.qwen import QwenClient
 from db.database import Database
-from risk.engine import RiskEngine
+from risk.engine import (
+    RiskEngine,
+    DEFAULT_MAX_TRADE_PCT,
+    DEFAULT_MAX_POSITION_PCT,
+    DEFAULT_MAX_DRAWDOWN_PCT,
+    DEFAULT_MAX_DAILY_LOSS_PCT,
+    DEFAULT_MAX_OPEN_TRADES,
+)
 
 CHECK_MARK = "\u2705"
 CROSS_MARK = "\u274c"
@@ -164,6 +171,9 @@ class Agent:
         self.db = db or Database()
         self.risk = risk or RiskEngine(db=self.db)
 
+        # Per-user risk engine cache (user_id -> RiskEngine instance with that user's overrides)
+        self._risk_cache: dict[int, "RiskEngine"] = {}
+
         # Lazy import to avoid circular deps
         from skills.registry import SkillsRegistry
         self.skills = skills_registry or SkillsRegistry(
@@ -196,6 +206,16 @@ class Agent:
     # -------------------------------------------------------------------------
     # Main entry point
     # -------------------------------------------------------------------------
+
+    def risk_for(self, user_id: int) -> "RiskEngine":
+        """Return a per-user risk engine with that user's overrides applied.
+
+        Cached per-user to avoid hitting the DB on every check.
+        """
+        if user_id not in self._risk_cache:
+            from risk.engine import RiskEngine as RE
+            self._risk_cache[user_id] = RE(db=self.db, user_id=user_id)
+        return self._risk_cache[user_id]
 
     def handle(self, ctx: AgentContext) -> str:
         """Handle a user message. Returns the response text (Telegram-friendly)."""
@@ -679,7 +699,7 @@ class Agent:
         # Risk check
         portfolio = self.bitget.get_portfolio_value_usdt()
         open_positions = len(self.db.get_open_trades())
-        allowed, risk_reason = self.risk.check_order(
+        allowed, risk_reason = self.risk_for(ctx.user_id).check_order(
             symbol=sym, side=side, size_usd=amount_usd,
             portfolio_value_usd=portfolio, open_positions_count=open_positions,
         )
@@ -811,7 +831,7 @@ class Agent:
             # Risk check
             portfolio = self.bitget.get_portfolio_value_usdt()
             open_positions = len(self.db.get_open_trades())
-            allowed, risk_reason = self.risk.check_order(
+            allowed, risk_reason = self.risk_for(ctx.user_id).check_order(
                 symbol=sym, side=side, size_usd=amount_usd,
                 portfolio_value_usd=portfolio, open_positions_count=open_positions,
             )
@@ -1005,25 +1025,46 @@ class Agent:
             return f"❌ Failed to load positions: {e}"
 
     def _cmd_risk(self, ctx: AgentContext) -> str:
-        s = self.risk.get_status()
-        return (
+        # Show the user's balance so they can see what the % caps mean in dollars
+        try:
+            balance = self.bitget.get_account_balance("USDT")
+        except Exception:
+            balance = 0.0
+        s = self.risk_for(ctx.user_id).get_status(balance_usd=balance)
+        out = (
             "*Risk Engine* 🛡️\n\n"
-            f"• Max trade: `${s['max_trade_usd']:.2f}`\n"
-            f"• Max position: `{s['max_position_pct']*100:.0f}%` of portfolio\n"
-            f"• Max drawdown: `{s['max_drawdown_pct']*100:.0f}%`\n"
+            f"• Max trade: `{s['max_trade_pct']}` of portfolio"
+        )
+        if "max_trade_usd_for_this_balance" in s:
+            out += f" (`${s['max_trade_usd_for_this_balance']:.2f}` for your ${balance:.2f} balance)"
+        out += "\n"
+        out += (
+            f"• Max position: `{s['max_position_pct']}` of portfolio\n"
+            f"• Max drawdown: `{s['max_drawdown_pct']}` kill switch\n"
+            f"• Max daily loss: `{s['max_daily_loss_pct']}`"
+        )
+        if "max_daily_loss_usd_for_this_balance" in s:
+            out += f" (`-${s['max_daily_loss_usd_for_this_balance']:.2f}` for your ${balance:.2f} balance)"
+        out += "\n"
+        out += (
             f"• Max open trades: `{s['max_open_trades']}`\n"
             f"• Max leverage: `{s['max_leverage']}x`\n"
             f"• Blacklist: `{', '.join(s['blacklist'])}`\n"
             f"• Kill switch: `{'🔴 ACTIVE' if s['kill_switch_active'] else '🟢 OFF'}`"
         )
+        out += (
+            "\n\n*These are percentages, not dollar caps — they scale with your account.*\n"
+            "*Change with:* `/settings max_trade_pct 50` (or any 1–100)"
+        )
+        return out
 
     def _cmd_kill(self, ctx: AgentContext) -> str:
         reason = " ".join(ctx.args.get("extra", [])) or "Manual"
-        self.risk.activate_kill_switch(reason=reason)
+        self.risk_for(ctx.user_id).activate_kill_switch(reason=reason)
         return f"🛑 *Kill switch activated.*\n\nReason: {reason}\n\nNo trades will be placed until you `/release`."
 
     def _cmd_release(self, ctx: AgentContext) -> str:
-        self.risk.release_kill_switch()
+        self.risk_for(ctx.user_id).release_kill_switch()
         return "✅ Kill switch released. Trading resumed."
 
     def _cmd_time(self, ctx: AgentContext) -> str:
@@ -1161,8 +1202,74 @@ class Agent:
         )
 
     def _cmd_settings(self, ctx: AgentContext) -> str:
-        # Show current settings
-        return self._cmd_risk(ctx) + "\n\n*To update:* (coming soon)"
+        """Show / update per-user risk settings. Persisted in DB.
+
+        Usage:
+          /settings                       — show current settings
+          /settings max_trade_pct 50      — max 50% of balance per trade
+          /settings max_position_pct 80   — max 80% in one asset
+          /settings max_drawdown_pct 20   — kill switch at 20% drawdown
+          /settings max_daily_loss_pct 15 — daily loss limit 15%
+          /settings max_open_trades 10    — up to 10 concurrent positions
+          /settings reset                 — back to defaults
+        """
+        args = ctx.args or {}
+        sub = (args.get("sub") or "").lower()
+        rest = args.get("rest") or []
+        risk = self.risk_for(ctx.user_id)
+
+        if sub in ("", "show", "list", "get"):
+            return self._cmd_risk(ctx)
+
+        if sub == "reset":
+            risk.config.max_trade_pct = DEFAULT_MAX_TRADE_PCT
+            risk.config.max_position_pct = DEFAULT_MAX_POSITION_PCT
+            risk.config.max_drawdown_pct = DEFAULT_MAX_DRAWDOWN_PCT
+            risk.config.max_daily_loss_pct = DEFAULT_MAX_DAILY_LOSS_PCT
+            risk.config.max_open_trades = DEFAULT_MAX_OPEN_TRADES
+            risk.save_overrides()
+            return (
+                "✓ *Risk settings reset to defaults.*\n\n"
+                f"• max_trade_pct: {DEFAULT_MAX_TRADE_PCT*100:.0f}%\n"
+                f"• max_position_pct: {DEFAULT_MAX_POSITION_PCT*100:.0f}%\n"
+                f"• max_drawdown_pct: {DEFAULT_MAX_DRAWDOWN_PCT*100:.0f}%\n"
+                f"• max_daily_loss_pct: {DEFAULT_MAX_DAILY_LOSS_PCT*100:.0f}%\n"
+                f"• max_open_trades: {DEFAULT_MAX_OPEN_TRADES}\n"
+            )
+
+        # Updates like "/settings max_trade_pct 50"
+        if sub == "max_trade_pct" and rest:
+            v = float(rest[0])
+            risk.update_limits(max_trade_pct=v)
+            return f"✓ Max trade: {risk.config.max_trade_pct*100:.0f}% of balance"
+        if sub == "max_position_pct" and rest:
+            v = float(rest[0])
+            risk.update_limits(max_position_pct=v)
+            return f"✓ Max position: {risk.config.max_position_pct*100:.0f}% of portfolio"
+        if sub == "max_drawdown_pct" and rest:
+            v = float(rest[0])
+            risk.update_limits(max_drawdown_pct=v)
+            return f"✓ Max drawdown (kill switch): {risk.config.max_drawdown_pct*100:.0f}%"
+        if sub == "max_daily_loss_pct" and rest:
+            v = float(rest[0])
+            risk.update_limits(max_daily_loss_pct=v)
+            return f"✓ Max daily loss: {risk.config.max_daily_loss_pct*100:.0f}%"
+        if sub == "max_open_trades" and rest:
+            v = int(float(rest[0]))
+            risk.update_limits(max_open_trades=v)
+            return f"✓ Max open trades: {risk.config.max_open_trades}"
+
+        return (
+            "*Settings help:*\n\n"
+            "• `/settings` — show current settings\n"
+            "• `/settings max_trade_pct 50` — max % of balance per trade (1–100)\n"
+            "• `/settings max_position_pct 80` — max % in one asset (1–100)\n"
+            "• `/settings max_drawdown_pct 20` — kill switch threshold (5–100)\n"
+            "• `/settings max_daily_loss_pct 15` — daily loss cap (5–100)\n"
+            "• `/settings max_open_trades 10` — concurrent positions (1–50)\n"
+            "• `/settings reset` — back to defaults\n\n"
+            "*Defaults:* 25% per trade, 75% per position, 30% drawdown kill switch, 30% daily loss, 5 positions."
+        )
 
     def _cmd_journal(self, ctx: AgentContext) -> str:
         trades = self.db.get_recent_trades(limit=10)
@@ -1741,7 +1848,7 @@ class Agent:
             portfolio = self.bitget.get_portfolio_value_usdt()
             open_positions = len(self.db.get_open_trades())
 
-            allowed, risk_reason = self.risk.check_order(
+            allowed, risk_reason = self.risk_for(ctx.user_id).check_order(
                 symbol=symbol,
                 side=side,
                 size_usd=amount_usd,
@@ -1879,7 +1986,7 @@ class Agent:
             balance = self.bitget.get_account_balance("USDT")
             portfolio = self.bitget.get_portfolio_value_usdt()
             open_positions = len(self.db.get_open_trades())
-            allowed, risk_reason = self.risk.check_order(
+            allowed, risk_reason = self.risk_for(ctx.user_id).check_order(
                 symbol=symbol,
                 side=side,
                 size_usd=amount_usd,

@@ -18,6 +18,7 @@ import json
 import logging
 import time
 import subprocess
+from pathlib import Path
 from typing import Any, Optional
 from dataclasses import dataclass
 
@@ -286,6 +287,51 @@ class Agent:
             "*Àkànjí, The Trader. Proven. Undeniable.*\n\n"
             "_Type `/start` to see the bot's quick start, or just send a prompt — e.g. `buy 2 SOL`._"
         )
+
+    def _cmd_upload_photo(self, ctx: AgentContext) -> str:
+        """Download a photo from a URL and save it as Àkànjí's photo.
+
+        Usage:
+          /upload_photo https://example.com/my-photo.jpg
+
+        After downloading, the bot will display this photo on every
+        /start and /intro reply.
+        """
+        import urllib.request
+        url = (ctx.args.get("url") or "").strip()
+        if not url:
+            return (
+                "❌ *No URL provided.*\n\n"
+                "Usage: `/upload_photo https://example.com/photo.jpg`\n\n"
+                "Or just *send a photo* to this chat — the bot will save it automatically."
+            )
+        if not (url.startswith("http://") or url.startswith("https://")):
+            return "❌ URL must start with http:// or https://"
+
+        assets_dir = Path(__file__).parent.parent / "assets"
+        assets_dir.mkdir(exist_ok=True)
+        target = assets_dir / "akanji_photo.jpg"
+
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = resp.read()
+            if len(data) < 1000:
+                return f"❌ Downloaded file is too small ({len(data)} bytes). Probably not an image."
+            if len(data) > 10_000_000:
+                return f"❌ Downloaded file is too large ({len(data)/1_000_000:.1f} MB). Max 10 MB."
+            with open(target, "wb") as f:
+                f.write(data)
+            return (
+                f"✓ *Photo saved.*\n\n"
+                f"Path: `{target}`\n"
+                f"Size: {len(data)/1024:.1f} KB\n\n"
+                f"Next `/start` will show this photo inline.\n\n"
+                f"_To also set it as the bot's Telegram profile picture, run:_ \n"
+                f"`python tools/set_bot_photo.py` _on the VPS._"
+            )
+        except Exception as e:
+            return f"❌ Download failed: {e}"
 
     def _cmd_help(self, ctx: AgentContext) -> str:
         return (

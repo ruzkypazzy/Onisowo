@@ -15,6 +15,7 @@ import re
 import json
 import logging
 import asyncio
+from pathlib import Path
 from typing import Optional
 from telegram import Update
 from telegram.ext import (
@@ -24,6 +25,29 @@ from telegram.ext import (
 from agent.core import Agent, AgentContext
 
 logger = logging.getLogger(__name__)
+
+
+# Path to Àkànjí's photo (the user uploads this via /upload_photo or by
+# sending the photo to the bot). Used as the bot's Telegram profile pic
+# AND inline with the /start and /intro replies.
+REPO_ROOT = Path(__file__).parent.parent
+AKANJI_PHOTO = Path(os.environ.get("AKANJI_PHOTO", REPO_ROOT / "assets" / "akanji_photo.jpg"))
+
+
+async def _send_photo(update: Update, asset_path: Path, caption: str = ""):
+    """Send a brand asset as a Telegram photo. If file is missing, silently skip."""
+    try:
+        if not asset_path.exists():
+            return None
+        with open(asset_path, "rb") as f:
+            return await update.message.reply_photo(
+                photo=f,
+                caption=caption[:1024] if caption else None,
+                parse_mode="Markdown",
+            )
+    except Exception as e:
+        logger.warning(f"Could not send photo {asset_path}: {e}")
+        return None
 
 
 HELP_TEXT = (
@@ -95,7 +119,7 @@ def parse_command_args(text: str) -> tuple[str, dict]:
     if cmd in ("start", "help", "about", "status", "balance", "skills", "journal",
                "review", "reflect", "memory", "risk", "release", "settings", "pnl",
                "llm", "llms", "time", "abort", "strategy", "positions",
-               "analyze", "autotrade", "proceed", "intro", "control"):
+               "analyze", "autotrade", "proceed", "intro", "control", "upload_photo"):
         return (cmd, {})
 
     if cmd == "strategist":
@@ -108,6 +132,10 @@ def parse_command_args(text: str) -> tuple[str, dict]:
         sub = parts2[0].lower() if parts2 else ""
         rest2 = parts2[1].split() if len(parts2) > 1 else []
         return (cmd, {"sub": sub, "rest": rest2})
+
+    if cmd == "upload_photo":
+        # /upload_photo <url>
+        return (cmd, {"url": rest.strip()})
 
     return ("ask", {"text": text})
 
@@ -161,6 +189,7 @@ def run_bot(token: Optional[str] = None):
             BotCommand("risk", "risk engine state"),
             BotCommand("kill", "activate kill switch"),
             BotCommand("release", "release kill switch"),
+            BotCommand("upload_photo", "set Àkànjí's photo from a URL"),
             BotCommand("settings", "adjust limits"),
         ]
         await app.bot.set_my_commands(commands)
@@ -204,6 +233,24 @@ def run_bot(token: Optional[str] = None):
             return
         text = update.message.text
         cmd, args = parse_command_args(text)
+
+        # Send Àkànjí's photo inline on /start and /intro
+        if cmd in ("start", "intro") and AKANJI_PHOTO.exists():
+            caption = (
+                "🪶 *Àkànjí Oníṣòwò — The Trader.*\n"
+                "_A real man. A living identity._"
+            ) if cmd == "start" else (
+                "*Àkànjí Oníṣòwò — The Trader.*"
+            )
+            try:
+                with open(AKANJI_PHOTO, "rb") as f:
+                    await update.message.reply_photo(
+                        photo=f,
+                        caption=caption,
+                        parse_mode="Markdown",
+                    )
+            except Exception as e:
+                logger.warning(f"Could not send àkànjí photo: {e}")
 
         # Show 'typing...' indicator + a status message immediately
         await send_typing(update)
@@ -387,9 +434,47 @@ def run_bot(token: Optional[str] = None):
             await edit_status(status_msg, f"❌ Voice error: {e}")
 
     # Register handlers
+
+    async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """User sent a photo. Save it as Àkànjí's photo + set as bot profile pic."""
+        if not update.message or not update.message.photo:
+            return
+        await update.message.chat.send_action(ChatAction.TYPING)
+        # Use the largest photo size
+        photo = update.message.photo[-1]
+        try:
+            file = await context.bot.get_file(photo.file_id)
+            assets_dir = REPO_ROOT / "assets"
+            assets_dir.mkdir(exist_ok=True)
+            target = assets_dir / "akanji_photo.jpg"
+            await file.download_to_drive(str(target))
+        except Exception as e:
+            logger.exception(f"Could not download photo: {e}")
+            await update.message.reply_text(f"❌ Download failed: {e}")
+            return
+        # Try to also set as bot's profile picture
+        set_pic_status = ""
+        try:
+            with open(target, "rb") as f:
+                await context.bot.set_my_profile_photo(photo=f)
+            set_pic_status = "\n✓ *Bot profile picture updated.*"
+        except Exception as e:
+            set_pic_status = (
+                f"\n_(Could not set bot profile pic: {e}_\n"
+                f"_Run `python tools/set_bot_photo.py` manually.)_"
+            )
+        await update.message.reply_text(
+            f"✓ *Photo saved.*\n\n"
+            f"Path: `{target}`\n"
+            f"Size: {photo.width}×{photo.height}\n\n"
+            f"This photo will now appear on every `/start` and `/intro` reply.{set_pic_status}",
+            parse_mode="Markdown",
+        )
+
     app.add_handler(MessageHandler(filters.COMMAND, cmd_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, freeform_handler))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, voice_handler))
+    app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
     app.add_error_handler(error_handler)
 
     # Run

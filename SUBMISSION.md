@@ -12,7 +12,7 @@
 
 ## 200-word description (submission text)
 
-**Oniṣòwò** is a self-hostable, open-source AI trading agent that runs in your Telegram, with **Qwen 3.6 Plus** as its brain. 100+ unique skills — MEV-aware execution, sybil counterparty scoring, recursive self-improvement, and 97 more — wrapped in a 5-command setup.
+**Oniṣòwò** is a self-hostable, open-source AI trading agent that runs in your Telegram, with **Qwen 3.6 Plus** as its brain. **186 skills** — 71 technical indicators, backtest engine, hyperopt, multi-agent debate, recursive self-improvement, adaptive TP/SL, regime detection, and more — wrapped in a 5-command setup.
 
 **Problem.** Existing trading bots are either black-box SaaS (custody your keys, trust their code) or thin LLM wrappers with no trading depth. No open-source agent combines MEV awareness, sybil defense, and a memory that learns from every trade.
 
@@ -20,7 +20,7 @@
 
 **Differentiators.**
 - **Powered by Qwen 3.6 Plus** — fast, accurate, cost-efficient, with $30 free credits from the Bitget hackathon
-- **100+ skills** organized in 9 tiers (core trading, risk, onchain intel, market intel, sentiment, strategy, agent meta, user-facing, utilities)
+- **186 skills** organized in 10 tiers (core trading, risk, technical indicators, market intel, sentiment, strategy, new CEX skills, agent meta, user-facing, utilities)
 - **MEV-aware execution** — checks sandwich-attack risk before every swap
 - **Sybil counterparty scoring** — refuses to enter positions with 60%+ sybil clusters
 - **Recursive self-improvement** — reviews last 7 days of trades, writes a new rule to memory every Sunday
@@ -54,7 +54,7 @@ python main.py # bot is live on YOUR machine, running on Qwen
 
 3 minutes. Your keys. Your VPS. Your bot. Running on **Qwen 3.6 Plus**.
 
-## The 100+ skills (counted, listed in /skills command)
+## The 186 skills (counted, listed in /skills command)
 
 | Tier | Count | Examples |
 |---|---:|---|

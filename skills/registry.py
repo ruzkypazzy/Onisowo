@@ -19,6 +19,7 @@ import json
 import logging
 import re
 import time
+import math
 from typing import Any, Callable, Optional
 from dataclasses import dataclass, field
 
@@ -26,6 +27,7 @@ from clients.bitget import BitgetClient, BitgetAPIError
 from clients.qwen import QwenClient
 from db.database import Database
 from risk.engine import RiskEngine
+from skills import indicators as ind
 
 logger = logging.getLogger(__name__)
 
@@ -90,27 +92,97 @@ class SkillsRegistry:
         self._register(Skill("whitelist_symbol", "Add a symbol to the whitelist (override blacklist)", "risk", self._s_whitelist, {"symbol": "str"}))
         self._register(Skill("blacklist_symbol", "Add a symbol to the blacklist", "risk", self._s_blacklist, {"symbol": "str"}))
 
-        # Tier 3: Onchain intelligence - 20
-        self._register(Skill("mev_exposure_check", "Check MEV exposure for a token (sandwich attack risk)", "onchain", self._s_mev_check, {"token": "str"}))
-        self._register(Skill("sybil_score", "Score a wallet for sybil risk (0-100, lower = safer)", "onchain", self._s_sybil_score, {"wallet": "str"}))
-        self._register(Skill("holder_concentration", "Check holder concentration (top-10 %)", "onchain", self._s_holder_conc, {"token": "str"}))
-        self._register(Skill("contract_safety", "Quick contract safety check (verified? proxy? owner?)", "onchain", self._s_contract_safety, {"address": "str", "chain": "str"}))
-        self._register(Skill("recent_large_txs", "Get recent large transactions for a token", "onchain", self._s_recent_txs, {"token": "str", "min_usd": "float"}))
-        self._register(Skill("wallet_age", "How old is this wallet? (days since first tx)", "onchain", self._s_wallet_age, {"wallet": "str"}))
-        self._register(Skill("wallet_funding_source", "Trace the funding source of a wallet", "onchain", self._s_funding_source, {"wallet": "str"}))
-        self._register(Skill("approval_check", "Check ERC20 approvals for a wallet (security)", "onchain", self._s_approval_check, {"wallet": "str"}))
-        self._register(Skill("token_sniffer", "Sniff a token contract for honeypot patterns", "onchain", self._s_token_sniffer, {"address": "str", "chain": "str"}))
-        self._register(Skill("lp_lock_check", "Check if LP tokens are locked (rug-pull risk)", "onchain", self._s_lp_lock, {"token": "str"}))
-        self._register(Skill("top_holders", "Get top 20 holders of a token", "onchain", self._s_top_holders, {"token": "str"}))
-        self._register(Skill("whale_movement_alert", "Alert if a top-10 holder moved >5% in last hour", "onchain", self._s_whale_alert, {"token": "str"}))
-        self._register(Skill("deployer_history", "Check if a deployer has launched rugs before", "onchain", self._s_deployer_history, {"address": "str", "chain": "str"}))
-        self._register(Skill("gas_oracle", "Current gas price (for transaction timing)", "onchain", self._s_gas_oracle, {"chain": "str"}))
-        self._register(Skill("block_explorer_link", "Generate block explorer link for an address/tx", "onchain", self._s_explorer_link, {"address_or_tx": "str", "chain": "str"}))
-        self._register(Skill("tx_status", "Get the status of a transaction (pending/confirmed/failed)", "onchain", self._s_tx_status, {"tx_hash": "str", "chain": "str"}))
-        self._register(Skill("token_decimals_lookup", "Get decimals for a token contract", "onchain", self._s_decimals, {"address": "str", "chain": "str"}))
-        self._register(Skill("total_supply_check", "Get total + circulating supply for a token", "onchain", self._s_supply, {"token": "str"}))
-        self._register(Skill("mint_authority_check", "Can the team mint more tokens? (rug-pull risk)", "onchain", self._s_mint_auth, {"token": "str"}))
-        self._register(Skill("recent_rugs_similar", "Check for recent rug pulls with similar characteristics", "onchain", self._s_rug_similar, {"token": "str"}))
+        # =====================================================================
+        # Tier 3: Technical indicators - 72 (replaces onchain tier; CEX-only)
+        # All indicators compute from Bitget OHLCV data, no on-chain deps.
+        # =====================================================================
+        # --- Trend (15) ---
+        self._register(Skill("ichimoku", "Ichimoku Cloud (Tenkan/Kijun/Senkou A/B/Chikou)", "indicators", self._s_ichimoku, {"symbol": "str", "highs": "list", "lows": "list", "closes": "list"}))
+        self._register(Skill("supertrend", "ATR-based SuperTrend with band + trend direction", "indicators", self._s_supertrend, {"symbol": "str", "highs": "list", "lows": "list", "closes": "list"}))
+        self._register(Skill("parabolic_sar", "Parabolic SAR with trend direction", "indicators", self._s_parabolic_sar, {"highs": "list", "lows": "list"}))
+        self._register(Skill("aroon", "Aroon Up/Down + Oscillator (period)", "indicators", self._s_aroon, {"highs": "list", "lows": "list"}))
+        self._register(Skill("vortex", "Vortex Indicator (VI+/VI-) — directional movement", "indicators", self._s_vortex, {"highs": "list", "lows": "list", "closes": "list"}))
+        self._register(Skill("ttm_squeeze", "TTM Squeeze — Bollinger inside Keltner = squeeze", "indicators", self._s_ttm_squeeze, {"closes": "list", "highs": "list", "lows": "list"}))
+        self._register(Skill("qqe", "Quantitative Qualitative Estimation (RSI + smoothed)", "indicators", self._s_qqe, {"closes": "list"}))
+        self._register(Skill("halftrend", "HalfTrend — pivot-based trend", "indicators", self._s_halftrend, {"closes": "list", "highs": "list", "lows": "list"}))
+        self._register(Skill("alligator", "Williams Alligator (Jaw/Teeth/Lips)", "indicators", self._s_alligator, {"highs": "list", "lows": "list"}))
+        self._register(Skill("gator", "Gator Oscillator (Alligator differential)", "indicators", self._s_gator, {"highs": "list", "lows": "list"}))
+        self._register(Skill("dmi", "Directional Movement Index (+DI/-DI/ADX)", "indicators", self._s_dmi, {"highs": "list", "lows": "list", "closes": "list"}))
+        self._register(Skill("aroon_oscillator", "Aroon Up minus Aroon Down (oscillator only)", "indicators", self._s_aroon_oscillator, {"highs": "list", "lows": "list"}))
+        self._register(Skill("dpo", "Detrended Price Oscillator", "indicators", self._s_dpo, {"closes": "list"}))
+        self._register(Skill("eom", "Ease of Movement", "indicators", self._s_eom, {"closes": "list", "highs": "list", "lows": "list", "volumes": "list"}))
+        self._register(Skill("tsi", "True Strength Index", "indicators", self._s_tsi, {"closes": "list"}))
+        # --- Momentum (15) ---
+        self._register(Skill("stochastic", "Stochastic Oscillator (%K/%D + cross)", "indicators", self._s_stochastic, {"highs": "list", "lows": "list", "closes": "list"}))
+        self._register(Skill("stoch_rsi", "Stochastic RSI", "indicators", self._s_stoch_rsi, {"closes": "list"}))
+        self._register(Skill("williams_r", "Williams %R", "indicators", self._s_williams_r, {"highs": "list", "lows": "list", "closes": "list"}))
+        self._register(Skill("cci", "Commodity Channel Index", "indicators", self._s_cci, {"highs": "list", "lows": "list", "closes": "list"}))
+        self._register(Skill("mfi", "Money Flow Index (price + volume)", "indicators", self._s_mfi, {"highs": "list", "lows": "list", "closes": "list", "volumes": "list"}))
+        self._register(Skill("roc", "Rate of Change (%)", "indicators", self._s_roc, {"closes": "list"}))
+        self._register(Skill("momentum", "Price momentum (raw difference)", "indicators", self._s_momentum, {"closes": "list"}))
+        self._register(Skill("ao", "Awesome Oscillator", "indicators", self._s_ao, {"highs": "list", "lows": "list"}))
+        self._register(Skill("apo", "Absolute Price Oscillator", "indicators", self._s_apo, {"closes": "list"}))
+        self._register(Skill("ppo", "Percentage Price Oscillator", "indicators", self._s_ppo, {"closes": "list"}))
+        self._register(Skill("ult_osc", "Ultimate Oscillator", "indicators", self._s_ult_osc, {"highs": "list", "lows": "list", "closes": "list"}))
+        self._register(Skill("rsi_divergence", "Detect RSI bullish/bearish divergence", "indicators", self._s_rsi_divergence, {"closes": "list"}))
+        self._register(Skill("macd_signal_cross", "MACD + signal line + last cross + age", "indicators", self._s_macd_signal_cross, {"closes": "list"}))
+        self._register(Skill("coppock", "Coppock Curve (long-term buy signal)", "indicators", self._s_coppock, {"closes": "list"}))
+        self._register(Skill("fisher_transform", "Fisher Transform (sharpens turning points)", "indicators", self._s_fisher_transform, {"highs": "list", "lows": "list"}))
+        # --- Volatility (12) ---
+        self._register(Skill("atr", "Welles Wilder Average True Range", "indicators", self._s_atr, {"highs": "list", "lows": "list", "closes": "list"}))
+        self._register(Skill("natr", "Normalized ATR (% of price)", "indicators", self._s_natr, {"highs": "list", "lows": "list", "closes": "list"}))
+        self._register(Skill("bollinger_width", "Bollinger Band Width", "indicators", self._s_bollinger_width, {"closes": "list"}))
+        self._register(Skill("bollinger_pct_b", "Bollinger %b (position within bands)", "indicators", self._s_bollinger_pct_b, {"closes": "list"}))
+        self._register(Skill("keltner", "Keltner Channels (EMA + ATR)", "indicators", self._s_keltner, {"closes": "list", "highs": "list", "lows": "list"}))
+        self._register(Skill("donchian", "Donchian Channels (high/low breakout bands)", "indicators", self._s_donchian, {"highs": "list", "lows": "list"}))
+        self._register(Skill("chandelier", "Chandelier Exit (ATR-based trailing stop)", "indicators", self._s_chandelier, {"highs": "list", "lows": "list", "closes": "list"}))
+        self._register(Skill("historical_volatility", "Historical volatility (daily + annualized)", "indicators", self._s_historical_volatility, {"closes": "list"}))
+        self._register(Skill("ulcer_index", "Ulcer Index (downside volatility)", "indicators", self._s_ulcer_index, {"closes": "list"}))
+        self._register(Skill("stddev", "Rolling Standard Deviation", "indicators", self._s_stddev, {"closes": "list"}))
+        self._register(Skill("chaikin_volatility", "Chaikin Volatility (high-low spread change)", "indicators", self._s_chaikin_volatility, {"highs": "list", "lows": "list"}))
+        # --- Volume (12) ---
+        self._register(Skill("obv", "On Balance Volume", "indicators", self._s_obv, {"closes": "list", "volumes": "list"}))
+        self._register(Skill("ad_line", "Accumulation/Distribution Line", "indicators", self._s_ad_line, {"highs": "list", "lows": "list", "closes": "list", "volumes": "list"}))
+        self._register(Skill("adosc", "Chaikin A/D Oscillator", "indicators", self._s_adosc, {"highs": "list", "lows": "list", "closes": "list", "volumes": "list"}))
+        self._register(Skill("cmf", "Chaikin Money Flow", "indicators", self._s_cmf, {"highs": "list", "lows": "list", "closes": "list", "volumes": "list"}))
+        self._register(Skill("vwap", "Volume-Weighted Average Price (cumulative)", "indicators", self._s_vwap, {"highs": "list", "lows": "list", "closes": "list", "volumes": "list"}))
+        self._register(Skill("vwma", "Volume-Weighted Moving Average", "indicators", self._s_vwma, {"closes": "list", "volumes": "list"}))
+        self._register(Skill("emv", "Ease of Movement Value", "indicators", self._s_emv, {"highs": "list", "lows": "list", "volumes": "list"}))
+        self._register(Skill("fi", "Force Index", "indicators", self._s_fi, {"closes": "list", "volumes": "list"}))
+        self._register(Skill("nvi", "Negative Volume Index (smart-money tracker)", "indicators", self._s_nvi, {"closes": "list", "volumes": "list"}))
+        self._register(Skill("pvi", "Positive Volume Index", "indicators", self._s_pvi, {"closes": "list", "volumes": "list"}))
+        self._register(Skill("pvt", "Price Volume Trend", "indicators", self._s_pvt, {"closes": "list", "volumes": "list"}))
+        self._register(Skill("volume_profile", "Volume-by-price histogram (POC + value area)", "indicators", self._s_volume_profile, {"closes": "list", "volumes": "list"}))
+        # --- Moving Averages (9 unique, dropped 3 duplicates) ---
+        self._register(Skill("kama", "Kaufman Adaptive MA", "indicators", self._s_kama, {"closes": "list"}))
+        self._register(Skill("frama", "Fractal Adaptive MA", "indicators", self._s_frama, {"closes": "list"}))
+        self._register(Skill("alma", "Arnaud Legoux MA", "indicators", self._s_alma, {"closes": "list"}))
+        self._register(Skill("hma", "Hull MA", "indicators", self._s_hma, {"closes": "list"}))
+        self._register(Skill("mcginley", "McGinley Dynamic", "indicators", self._s_mcginley, {"closes": "list"}))
+        self._register(Skill("t3", "Tillson T3", "indicators", self._s_t3, {"closes": "list"}))
+        self._register(Skill("zlema", "Zero-Lag EMA", "indicators", self._s_zlema, {"closes": "list"}))
+        self._register(Skill("tema", "Triple EMA", "indicators", self._s_tema, {"closes": "list"}))
+        self._register(Skill("smma", "Wilder's Smoothed MA", "indicators", self._s_smma, {"closes": "list"}))
+        self._register(Skill("garman_klass", "Garman-Klass volatility estimator", "indicators", self._s_garman_klass, {"highs": "list", "lows": "list"}))
+        # --- Statistical / Regime (9) ---
+        self._register(Skill("beta", "Beta vs benchmark (typically BTC)", "indicators", self._s_beta, {"closes": "list", "benchmark": "list"}))
+        self._register(Skill("correlation", "Rolling correlation between two assets", "indicators", self._s_correlation, {"asset_a": "list", "asset_b": "list"}))
+        self._register(Skill("hurst", "Hurst exponent (trending vs mean-reverting regime)", "indicators", self._s_hurst, {"closes": "list"}))
+        self._register(Skill("linear_regression", "Linear regression slope + R^2", "indicators", self._s_linear_regression, {"closes": "list"}))
+        self._register(Skill("zscore", "Z-score from rolling mean", "indicators", self._s_zscore, {"closes": "list"}))
+        self._register(Skill("skew", "Return distribution skewness", "indicators", self._s_skew, {"closes": "list"}))
+        self._register(Skill("kurtosis", "Return distribution kurtosis", "indicators", self._s_kurtosis, {"closes": "list"}))
+        self._register(Skill("variance", "Rolling variance", "indicators", self._s_variance, {"closes": "list"}))
+        self._register(Skill("quantile", "Rolling quantiles (q10/25/50/75/90)", "indicators", self._s_quantile, {"closes": "list"}))
+
+        # =====================================================================
+        # Tier 3.5: NEW CEX-only skills (4) — backtest + debate + template + signal
+        # =====================================================================
+        self._register(Skill("backtest", "Run a strategy against historical Bitget OHLCV data. Returns total return %, Sharpe, max drawdown, win rate.", "strategy_new", self._s_backtest, {"symbol": "str", "strategy": "str", "days": "int"}))
+        self._register(Skill("hyperopt", "Auto-optimize strategy parameters over historical data. Returns best params + backtest results.", "strategy_new", self._s_hyperopt, {"symbol": "str", "strategy": "str", "trials": "int"}))
+        self._register(Skill("bull_bear_debate", "Multi-agent debate before trade decision. Bull researcher argues long, bear argues short, research manager adjudicates.", "strategy_new", self._s_debate, {"symbol": "str", "thesis": "str"}))
+        self._register(Skill("polymarket_signal", "Fetch prediction-market sentiment for a topic (e.g., 'will BTC hit 100k in 2026'). Useful as a contrarian signal.", "strategy_new", self._s_polymarket, {"query": "str"}))
+        self._register(Skill("strategy_template", "Load a pre-built strategy template (momentum_breakout, mean_reversion, breakout, etc.)", "strategy_new", self._s_template, {"name": "str"}))
 
         # Tier 4: Market intelligence - 15
         self._register(Skill("funding_rate_history", "Funding rate history for a futures symbol", "market_intel", self._s_funding_hist, {"symbol": "str", "days": "int"}))
@@ -165,10 +237,7 @@ class SkillsRegistry:
         self._register(Skill("regime_detector", "Classify current market regime (trending_bull/bear/ranging/chaos/accumulation). Strategies adjust params by regime.", "market_intel", self._s_regime_detector, {"symbol": "str", "lookback_days": "int"}))
         self._register(Skill("narrative_momentum_scorer", "Score a narrative's trajectory (accelerating/stable/decaying) from news + sentiment.", "sentiment", self._s_narrative_momentum, {"symbol": "str"}))
         self._register(Skill("false_breakout_detector", "Detect below-avg-volume breakouts that mean-revert (classic traps).", "market_intel", self._s_false_breakout_detector, {"symbol": "str"}))
-        self._register(Skill("smart_money_tracker", "Track known alpha wallets. 3+ entering a token = strong signal.", "onchain", self._s_smart_money_tracker, {"symbol": "str"}))
         self._register(Skill("liquidity_depth_analyzer", "Measure real orderbook depth at ±1/2/5% and estimate slippage. Split or skip if too high.", "risk", self._s_liquidity_depth, {"symbol": "str", "size_usd": "float"}))
-        self._register(Skill("unlock_calendar", "Check token unlock/vesting events. Never hold through large unlocks.", "onchain", self._s_unlock_calendar, {"symbol": "str"}))
-        self._register(Skill("bridge_flow_monitor", "Track net bridge inflows/outflows across chains (ETH↔Arbitrum etc.).", "onchain", self._s_bridge_flow, {"symbol": "str"}))
         self._register(Skill("order_timing_optimizer", "Find lowest-spread execution windows from intraday volume patterns.", "core_trading", self._s_order_timing, {"symbol": "str"}))
         self._register(Skill("iceberg_order_builder", "Split large orders into randomized child orders with delays. Reduces market impact.", "core_trading", self._s_iceberg_order, {"symbol": "str", "total_size_usd": "float", "num_children": "int"}))
         self._register(Skill("funding_rate_arb_detector", "Scan for compelling funding-rate carry trade opportunities (short perp + long spot).", "strategy", self._s_funding_arb, {"symbol": "str"}))
@@ -374,6 +443,740 @@ class SkillsRegistry:
                     },
                 })
         return schemas
+
+    # =========================================================================
+    # Tier 3: Technical indicator implementations (72 indicators)
+    # All take OHLCV lists (already-loaded) and return a dict.
+    # =========================================================================
+
+    @staticmethod
+    def _load_ohlcv(bitget, symbol: str, granularity: str = "1h", limit: int = 200):
+        """Helper: load OHLCV from Bitget for any indicator. Returns dict with lists."""
+        try:
+            candles = bitget.get_candles(symbol=symbol, granularity=granularity, limit=limit)
+            return {
+                "opens": [c[1] for c in candles],
+                "highs": [c[2] for c in candles],
+                "lows": [c[3] for c in candles],
+                "closes": [c[4] for c in candles],
+                "volumes": [c[5] for c in candles] if len(candles[0]) > 5 else [],
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _s_ichimoku(self, symbol, highs=None, lows=None, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, symbol, "1h", 200)
+            if "error" in o: return o
+            highs, lows, closes = o["highs"], o["lows"], o["closes"]
+        return ind.ichimoku(closes, highs, lows)
+
+    def _s_supertrend(self, symbol, highs=None, lows=None, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, symbol, "1h", 100)
+            if "error" in o: return o
+            highs, lows, closes = o["highs"], o["lows"], o["closes"]
+        return ind.supertrend(closes, highs, lows)
+
+    def _s_parabolic_sar(self, highs=None, lows=None):
+        if not highs:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.parabolic_sar(o["highs"], o["lows"]) if "error" not in o else o
+        return ind.parabolic_sar(highs, lows)
+
+    def _s_aroon(self, highs=None, lows=None):
+        if not highs:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.aroon(o["highs"], o["lows"]) if "error" not in o else o
+        return ind.aroon(highs, lows)
+
+    def _s_vortex(self, highs=None, lows=None, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            if "error" in o: return o
+            highs, lows, closes = o["highs"], o["lows"], o["closes"]
+        return ind.vortex(highs, lows, closes)
+
+    def _s_ttm_squeeze(self, closes=None, highs=None, lows=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            if "error" in o: return o
+            closes, highs, lows = o["closes"], o["highs"], o["lows"]
+        return ind.ttm_squeeze(closes, highs, lows)
+
+    def _s_qqe(self, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.qqe(o["closes"]) if "error" not in o else o
+        return ind.qqe(closes)
+
+    def _s_halftrend(self, closes=None, highs=None, lows=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            if "error" in o: return o
+            closes, highs, lows = o["closes"], o["highs"], o["lows"]
+        return ind.halftrend(closes, highs, lows)
+
+    def _s_alligator(self, highs=None, lows=None):
+        if not highs:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.alligator(o["highs"], o["lows"]) if "error" not in o else o
+        return ind.alligator(highs, lows)
+
+    def _s_gator(self, highs=None, lows=None):
+        if not highs:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.gator(o["highs"], o["lows"]) if "error" not in o else o
+        return ind.gator(highs, lows)
+
+    def _s_dmi(self, highs=None, lows=None, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            if "error" in o: return o
+            highs, lows, closes = o["highs"], o["lows"], o["closes"]
+        return ind.dmi(highs, lows, closes)
+
+    def _s_aroon_oscillator(self, highs=None, lows=None):
+        if not highs:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.aroon_oscillator(o["highs"], o["lows"]) if "error" not in o else o
+        return ind.aroon_oscillator(highs, lows)
+
+    def _s_dpo(self, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.dpo(o["closes"]) if "error" not in o else o
+        return ind.dpo(closes)
+
+    def _s_eom(self, closes=None, highs=None, lows=None, volumes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            if "error" in o: return o
+            closes, highs, lows, volumes = o["closes"], o["highs"], o["lows"], o["volumes"]
+        return ind.eom(closes, highs, lows, volumes)
+
+    def _s_tsi(self, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.tsi(o["closes"]) if "error" not in o else o
+        return ind.tsi(closes)
+
+    def _s_stochastic(self, highs=None, lows=None, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            if "error" in o: return o
+            highs, lows, closes = o["highs"], o["lows"], o["closes"]
+        return ind.stochastic(highs, lows, closes)
+
+    def _s_stoch_rsi(self, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.stoch_rsi(o["closes"]) if "error" not in o else o
+        return ind.stoch_rsi(closes)
+
+    def _s_williams_r(self, highs=None, lows=None, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            if "error" in o: return o
+            highs, lows, closes = o["highs"], o["lows"], o["closes"]
+        return ind.williams_r(highs, lows, closes)
+
+    def _s_cci(self, highs=None, lows=None, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            if "error" in o: return o
+            highs, lows, closes = o["highs"], o["lows"], o["closes"]
+        return ind.cci(highs, lows, closes)
+
+    def _s_mfi(self, highs=None, lows=None, closes=None, volumes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            if "error" in o: return o
+            highs, lows, closes, volumes = o["highs"], o["lows"], o["closes"], o["volumes"]
+        return ind.mfi(highs, lows, closes, volumes)
+
+    def _s_roc(self, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.roc(o["closes"]) if "error" not in o else o
+        return ind.roc(closes)
+
+    def _s_momentum(self, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.momentum_indicator(o["closes"]) if "error" not in o else o
+        return ind.momentum_indicator(closes)
+
+    def _s_ao(self, highs=None, lows=None):
+        if not highs:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.ao(o["highs"], o["lows"]) if "error" not in o else o
+        return ind.ao(highs, lows)
+
+    def _s_apo(self, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.apo(o["closes"]) if "error" not in o else o
+        return ind.apo(closes)
+
+    def _s_ppo(self, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.ppo(o["closes"]) if "error" not in o else o
+        return ind.ppo(closes)
+
+    def _s_ult_osc(self, highs=None, lows=None, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            if "error" in o: return o
+            highs, lows, closes = o["highs"], o["lows"], o["closes"]
+        return ind.ult_osc(highs, lows, closes)
+
+    def _s_rsi_divergence(self, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 200)
+            return ind.rsi_divergence(o["closes"]) if "error" not in o else o
+        return ind.rsi_divergence(closes)
+
+    def _s_macd_signal_cross(self, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.macd_signal_cross(o["closes"]) if "error" not in o else o
+        return ind.macd_signal_cross(closes)
+
+    def _s_coppock(self, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1d", 200)
+            return ind.coppock(o["closes"]) if "error" not in o else o
+        return ind.coppock(closes)
+
+    def _s_fisher_transform(self, highs=None, lows=None):
+        if not highs:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.fisher_transform(o["highs"], o["lows"]) if "error" not in o else o
+        return ind.fisher_transform(highs, lows)
+
+    def _s_atr(self, highs=None, lows=None, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            if "error" in o: return o
+            highs, lows, closes = o["highs"], o["lows"], o["closes"]
+        return ind.atr(highs, lows, closes)
+
+    def _s_natr(self, highs=None, lows=None, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            if "error" in o: return o
+            highs, lows, closes = o["highs"], o["lows"], o["closes"]
+        return ind.natr(highs, lows, closes)
+
+    def _s_bollinger_width(self, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.bollinger_width(o["closes"]) if "error" not in o else o
+        return ind.bollinger_width(closes)
+
+    def _s_bollinger_pct_b(self, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.bollinger_pct_b(o["closes"]) if "error" not in o else o
+        return ind.bollinger_pct_b(closes)
+
+    def _s_keltner(self, closes=None, highs=None, lows=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            if "error" in o: return o
+            closes, highs, lows = o["closes"], o["highs"], o["lows"]
+        return ind.keltner(closes, highs, lows)
+
+    def _s_donchian(self, highs=None, lows=None):
+        if not highs:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.donchian(o["highs"], o["lows"]) if "error" not in o else o
+        return ind.donchian(highs, lows)
+
+    def _s_chandelier(self, highs=None, lows=None, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            if "error" in o: return o
+            highs, lows, closes = o["highs"], o["lows"], o["closes"]
+        return ind.chandelier(highs, lows, closes)
+
+    def _s_historical_volatility(self, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 200)
+            return ind.historical_volatility(o["closes"]) if "error" not in o else o
+        return ind.historical_volatility(closes)
+
+    def _s_ulcer_index(self, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1d", 100)
+            return ind.ulcer_index(o["closes"]) if "error" not in o else o
+        return ind.ulcer_index(closes)
+
+    def _s_stddev(self, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.stddev(o["closes"]) if "error" not in o else o
+        return ind.stddev(closes)
+
+    def _s_chaikin_volatility(self, highs=None, lows=None):
+        if not highs:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.chaikin_volatility(o["highs"], o["lows"]) if "error" not in o else o
+        return ind.chaikin_volatility(highs, lows)
+
+    def _s_obv(self, closes=None, volumes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 200)
+            if "error" in o: return o
+            closes, volumes = o["closes"], o["volumes"]
+        return ind.obv(closes, volumes)
+
+    def _s_ad_line(self, highs=None, lows=None, closes=None, volumes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            if "error" in o: return o
+            highs, lows, closes, volumes = o["highs"], o["lows"], o["closes"], o["volumes"]
+        return ind.ad_line(highs, lows, closes, volumes)
+
+    def _s_adosc(self, highs=None, lows=None, closes=None, volumes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            if "error" in o: return o
+            highs, lows, closes, volumes = o["highs"], o["lows"], o["closes"], o["volumes"]
+        return ind.adosc(highs, lows, closes, volumes)
+
+    def _s_cmf(self, highs=None, lows=None, closes=None, volumes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            if "error" in o: return o
+            highs, lows, closes, volumes = o["highs"], o["lows"], o["closes"], o["volumes"]
+        return ind.cmf(highs, lows, closes, volumes)
+
+    def _s_vwap(self, highs=None, lows=None, closes=None, volumes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 200)
+            if "error" in o: return o
+            highs, lows, closes, volumes = o["highs"], o["lows"], o["closes"], o["volumes"]
+        return ind.vwap(highs, lows, closes, volumes)
+
+    def _s_vwma(self, closes=None, volumes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            if "error" in o: return o
+            closes, volumes = o["closes"], o["volumes"]
+        return ind.vwma(closes, volumes)
+
+    def _s_emv(self, highs=None, lows=None, volumes=None):
+        if not highs:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            if "error" in o: return o
+            highs, lows, volumes = o["highs"], o["lows"], o["volumes"]
+        return ind.emv(highs, lows, volumes)
+
+    def _s_fi(self, closes=None, volumes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            if "error" in o: return o
+            closes, volumes = o["closes"], o["volumes"]
+        return ind.fi(closes, volumes)
+
+    def _s_nvi(self, closes=None, volumes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 200)
+            if "error" in o: return o
+            closes, volumes = o["closes"], o["volumes"]
+        return ind.nvi(closes, volumes)
+
+    def _s_pvi(self, closes=None, volumes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 200)
+            if "error" in o: return o
+            closes, volumes = o["closes"], o["volumes"]
+        return ind.pvi(closes, volumes)
+
+    def _s_pvt(self, closes=None, volumes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 200)
+            if "error" in o: return o
+            closes, volumes = o["closes"], o["volumes"]
+        return ind.pvt(closes, volumes)
+
+    def _s_volume_profile(self, closes=None, volumes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 200)
+            if "error" in o: return o
+            closes, volumes = o["closes"], o["volumes"]
+        return ind.volume_profile(closes, volumes)
+
+    def _s_kama(self, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.kama(o["closes"]) if "error" not in o else o
+        return ind.kama(closes)
+
+    def _s_frama(self, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.frama(o["closes"]) if "error" not in o else o
+        return ind.frama(closes)
+
+    def _s_alma(self, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.alma(o["closes"]) if "error" not in o else o
+        return ind.alma(closes)
+
+    def _s_hma(self, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.hma(o["closes"]) if "error" not in o else o
+        return ind.hma(closes)
+
+    def _s_mcginley(self, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.mcginley(o["closes"]) if "error" not in o else o
+        return ind.mcginley(closes)
+
+    def _s_t3(self, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.t3(o["closes"]) if "error" not in o else o
+        return ind.t3(closes)
+
+    def _s_zlema(self, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.zlema(o["closes"]) if "error" not in o else o
+        return ind.zlema(closes)
+
+    def _s_tema(self, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.tema(o["closes"]) if "error" not in o else o
+        return ind.tema(closes)
+
+    def _s_smma(self, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.smma(o["closes"]) if "error" not in o else o
+        return ind.smma(closes)
+
+    def _s_garman_klass(self, highs=None, lows=None):
+        if not highs:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.garman_klass(o["highs"], o["lows"]) if "error" not in o else o
+        return ind.garman_klass(highs, lows)
+
+    def _s_beta(self, closes=None, benchmark=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 200)
+            b = self._load_ohlcv(self.bitget, "BTCUSDT", "1h", 200)
+            if "error" in o or "error" in b: return {"error": "could not load data"}
+            closes = o["closes"]
+            benchmark = b["closes"]
+        return ind.beta(closes, benchmark)
+
+    def _s_correlation(self, asset_a=None, asset_b=None):
+        if not asset_a:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            b = self._load_ohlcv(self.bitget, "BTCUSDT", "1h", 100)
+            if "error" in o or "error" in b: return {"error": "could not load data"}
+            asset_a = o["closes"]
+            asset_b = b["closes"]
+        return ind.correlation(asset_a, asset_b)
+
+    def _s_hurst(self, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 200)
+            return ind.hurst(o["closes"]) if "error" not in o else o
+        return ind.hurst(closes)
+
+    def _s_linear_regression(self, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.linear_regression(o["closes"]) if "error" not in o else o
+        return ind.linear_regression(closes)
+
+    def _s_zscore(self, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.zscore(o["closes"]) if "error" not in o else o
+        return ind.zscore(closes)
+
+    def _s_skew(self, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 200)
+            return ind.skew(o["closes"]) if "error" not in o else o
+        return ind.skew(closes)
+
+    def _s_kurtosis(self, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 200)
+            return ind.kurtosis(o["closes"]) if "error" not in o else o
+        return ind.kurtosis(closes)
+
+    def _s_variance(self, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.variance(o["closes"]) if "error" not in o else o
+        return ind.variance(closes)
+
+    def _s_quantile(self, closes=None):
+        if not closes:
+            o = self._load_ohlcv(self.bitget, "", "1h", 100)
+            return ind.quantile(o["closes"]) if "error" not in o else o
+        return ind.quantile(closes)
+
+    # =========================================================================
+    # Tier 3.5: NEW CEX-only skills (4)
+    # =========================================================================
+
+    def _s_backtest(self, symbol: str = "BTCUSDT", strategy: str = "momentum_breakout", days: int = 30) -> dict:
+        """Run a strategy against historical OHLCV from Bitget.
+
+        Strategies:
+          - momentum_breakout: long when close > 20-period high; exit on close < 20-period low
+          - mean_reversion: long when RSI < 30; exit when RSI > 50
+          - ema_cross: long when 9-EMA crosses above 21-EMA; exit on cross below
+          - supertrend: long when supertrend says up; exit when says down
+        """
+        try:
+            granularity = "1h" if days <= 90 else "4h"
+            limit = min(days * 24 if granularity == "1h" else days * 6, 1000)
+            candles = self.bitget.get_candles(symbol=symbol, granularity=granularity, limit=limit)
+            closes = [c[4] for c in candles]
+            highs = [c[2] for c in candles]
+            lows = [c[3] for c in candles]
+            if len(closes) < 30:
+                return {"error": "Not enough data"}
+            trades = []
+            position = None
+            entry_price = 0
+            for i in range(20, len(closes)):
+                price = closes[i]
+                if position is None:
+                    # Entry logic
+                    enter = False
+                    if strategy == "momentum_breakout":
+                        enter = price > max(highs[i - 20:i])
+                    elif strategy == "mean_reversion":
+                        rsi_s = ind.rsi_series(closes[:i + 1], 14)
+                        enter = not math.isnan(rsi_s[-1]) and rsi_s[-1] < 30
+                    elif strategy == "ema_cross":
+                        ema9 = ind._ema(closes[:i + 1], 9)
+                        ema21 = ind._ema(closes[:i + 1], 21)
+                        enter = (not math.isnan(ema9[-1]) and not math.isnan(ema21[-1])
+                                 and not math.isnan(ema9[-2]) and not math.isnan(ema21[-2])
+                                 and ema9[-2] <= ema21[-2] and ema9[-1] > ema21[-1])
+                    elif strategy == "supertrend":
+                        st = ind.supertrend(closes[:i + 1], highs[:i + 1], lows[:i + 1])
+                        enter = st.get("trend") == "up"
+                    if enter:
+                        position = "long"
+                        entry_price = price
+                else:
+                    # Exit logic
+                    exit_now = False
+                    if strategy == "momentum_breakout":
+                        exit_now = price < min(lows[i - 20:i])
+                    elif strategy == "mean_reversion":
+                        rsi_s = ind.rsi_series(closes[:i + 1], 14)
+                        exit_now = not math.isnan(rsi_s[-1]) and rsi_s[-1] > 50
+                    elif strategy == "ema_cross":
+                        ema9 = ind._ema(closes[:i + 1], 9)
+                        ema21 = ind._ema(closes[:i + 1], 21)
+                        exit_now = (not math.isnan(ema9[-1]) and not math.isnan(ema21[-1])
+                                    and not math.isnan(ema9[-2]) and not math.isnan(ema21[-2])
+                                    and ema9[-2] >= ema21[-2] and ema9[-1] < ema21[-1])
+                    elif strategy == "supertrend":
+                        st = ind.supertrend(closes[:i + 1], highs[:i + 1], lows[:i + 1])
+                        exit_now = st.get("trend") == "down"
+                    if exit_now:
+                        pnl = (price - entry_price) / entry_price * 100
+                        trades.append({"entry": entry_price, "exit": price, "pnl_pct": round(pnl, 2)})
+                        position = None
+            if not trades:
+                return {"symbol": symbol, "strategy": strategy, "trades": 0, "note": "No trades triggered"}
+            wins = [t for t in trades if t["pnl_pct"] > 0]
+            total_return = sum(t["pnl_pct"] for t in trades)
+            return {
+                "symbol": symbol,
+                "strategy": strategy,
+                "days": days,
+                "trades": len(trades),
+                "wins": len(wins),
+                "losses": len(trades) - len(wins),
+                "win_rate": round(len(wins) / len(trades) * 100, 1),
+                "total_return_pct": round(total_return, 2),
+                "avg_trade_pct": round(total_return / len(trades), 2),
+                "best_trade_pct": round(max(t["pnl_pct"] for t in trades), 2),
+                "worst_trade_pct": round(min(t["pnl_pct"] for t in trades), 2),
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _s_hyperopt(self, symbol: str = "BTCUSDT", strategy: str = "momentum_breakout", trials: int = 20) -> dict:
+        """Auto-optimize lookback parameter for the strategy."""
+        try:
+            candles = self.bitget.get_candles(symbol=symbol, granularity="1h", limit=720)  # 30 days
+            closes = [c[4] for c in candles]
+            highs = [c[2] for c in candles]
+            lows = [c[3] for c in candles]
+            if len(closes) < 100:
+                return {"error": "Not enough data"}
+            results = []
+            for lookback in [5, 10, 15, 20, 30, 50]:
+                trades = []
+                position = None
+                entry = 0
+                for i in range(lookback, len(closes)):
+                    price = closes[i]
+                    if position is None:
+                        enter = price > max(highs[i - lookback:i])
+                        if enter:
+                            position = "long"
+                            entry = price
+                    else:
+                        exit_now = price < min(lows[i - lookback:i])
+                        if exit_now:
+                            trades.append((price - entry) / entry * 100)
+                            position = None
+                if trades:
+                    total = sum(trades)
+                    wins = sum(1 for t in trades if t > 0)
+                    results.append({
+                        "lookback": lookback,
+                        "trades": len(trades),
+                        "win_rate": round(wins / len(trades) * 100, 1),
+                        "total_return_pct": round(total, 2),
+                        "avg_trade_pct": round(total / len(trades), 2),
+                    })
+                else:
+                    results.append({"lookback": lookback, "trades": 0})
+            results = [r for r in results if r.get("trades", 0) > 0]
+            results.sort(key=lambda x: x.get("total_return_pct", 0), reverse=True)
+            return {
+                "symbol": symbol,
+                "strategy": strategy,
+                "trials": len(results),
+                "best": results[0] if results else None,
+                "all_results": results,
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _s_debate(self, symbol: str, thesis: str = "") -> dict:
+        """Multi-agent bull/bear debate before trade decision.
+
+        Bull researcher argues the long case.
+        Bear researcher argues the short case.
+        Research manager adjudicates.
+        All three are Qwen LLM calls.
+        """
+        try:
+            bull_prompt = (
+                f"You are the BULL researcher for {symbol}. The proposed thesis is: {thesis}.\n\n"
+                f"Using current market context (price action, momentum, sentiment), "
+                f"argue why going LONG makes sense. Be specific: cite indicators, "
+                f"price levels, catalysts. 3-5 sentences."
+            )
+            bear_prompt = (
+                f"You are the BEAR researcher for {symbol}. The proposed thesis is: {thesis}.\n\n"
+                f"Argue why going SHORT or staying out makes more sense. "
+                f"Cite specific risks: overbought signals, resistance, "
+                f"macro headwinds. 3-5 sentences."
+            )
+            bull_resp = self.qwen.chat(bull_prompt, temperature=0.7) if hasattr(self, 'qwen') else "Bull case unavailable"
+            bear_resp = self.qwen.chat(bear_prompt, temperature=0.7) if hasattr(self, 'qwen') else "Bear case unavailable"
+            manager_prompt = (
+                f"You are the RESEARCH MANAGER for {symbol}.\n\n"
+                f"BULL ARGUES:\n{bull_resp}\n\n"
+                f"BEAR ARGUES:\n{bear_resp}\n\n"
+                f"Adjudicate: should we go long, short, or hold? "
+                f"Give a clear decision + 2-3 sentence rationale."
+            )
+            manager_resp = self.qwen.chat(manager_prompt, temperature=0.3) if hasattr(self, 'qwen') else "Manager unavailable"
+            return {
+                "symbol": symbol,
+                "thesis": thesis,
+                "bull": bull_resp,
+                "bear": bear_resp,
+                "decision": manager_resp,
+            }
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _s_polymarket(self, query: str) -> dict:
+        """Fetch prediction-market sentiment for a topic.
+
+        Note: Polymarket doesn't have an open API. This is a stub that returns
+        the query + sentiment estimation. Replace with real API call when
+        integration is set up.
+        """
+        # Stub: in production, hit polymarket.com/api or use their Gamma API
+        # https://gamma-api.polymarket.com/markets?active=true&closed=false
+        return {
+            "query": query,
+            "source": "polymarket_stub",
+            "note": "Polymarket integration not yet active. This is a placeholder. Wire real API at https://gamma-api.polymarket.com/markets",
+            "sentiment_estimate": None,
+        }
+
+    def _s_template(self, name: str = "momentum_breakout") -> dict:
+        """Load a pre-built strategy template.
+
+        Available:
+          - momentum_breakout: long on 20-bar high breakout
+          - mean_reversion: long on RSI < 30, exit on RSI > 50
+          - ema_cross: 9/21 EMA crossover
+          - supertrend: ATR-based SuperTrend
+          - bollinger_squeeze: long on BB squeeze breakout
+          - vwap_reclaim: long on reclaim of VWAP
+        """
+        templates = {
+            "momentum_breakout": {
+                "name": "Momentum Breakout",
+                "logic": "Long when close > 20-bar high. Exit when close < 20-bar low.",
+                "best_for": "Trending markets, breakout setups.",
+                "params": {"lookback": 20},
+            },
+            "mean_reversion": {
+                "name": "Mean Reversion",
+                "logic": "Long when RSI(14) < 30 (oversold). Exit when RSI > 50.",
+                "best_for": "Ranging markets, oversold bounces.",
+                "params": {"rsi_period": 14, "entry": 30, "exit": 50},
+            },
+            "ema_cross": {
+                "name": "EMA Crossover",
+                "logic": "Long when 9-EMA crosses above 21-EMA. Exit on cross below.",
+                "best_for": "Trend following.",
+                "params": {"fast_ema": 9, "slow_ema": 21},
+            },
+            "supertrend": {
+                "name": "SuperTrend",
+                "logic": "Long when SuperTrend = up. Exit when SuperTrend = down.",
+                "best_for": "Trending markets, ATR-adjusted stops.",
+                "params": {"period": 10, "multiplier": 3.0},
+            },
+            "bollinger_squeeze": {
+                "name": "Bollinger Squeeze",
+                "logic": "Long when BB width is in bottom 10% (squeeze) and price closes above upper band.",
+                "best_for": "Volatility expansion after contraction.",
+                "params": {"period": 20, "std": 2, "squeeze_percentile": 10},
+            },
+            "vwap_reclaim": {
+                "name": "VWAP Reclaim",
+                "logic": "Long when price reclaims VWAP from below with volume > 1.5x average.",
+                "best_for": "Institutional accumulation zones.",
+                "params": {"volume_threshold": 1.5},
+            },
+        }
+        if name not in templates:
+            return {"error": f"Unknown template: {name}", "available": list(templates.keys())}
+        return templates[name]
 
     # =========================================================================
     # Skill implementations (Tier 1: Core Trading)

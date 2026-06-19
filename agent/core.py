@@ -62,7 +62,7 @@ Your personality:
 - You speak with the voice of a veteran trader, not a chatbot. Plain, direct, no hype.
 
 Your capabilities:
-- You have 100+ skills (functions) you can call. See the tools list.
+- You have 186 skills (functions) you can call. See the tools list.
 - You can read market data, place orders, manage risk, analyze onchain signals.
 - You can score counterparties for sybil risk before entering low-cap positions.
 - You can check MEV exposure before swaps.
@@ -249,7 +249,8 @@ class Agent:
             "One constant truth: *he sees the market before the market moves*.\n\n"
             "I carry his name because I carry his mind. You give me a market; I give you a read.\n\n"
             "I trade crypto on Bitget, powered by *Qwen 3.6 Plus*. "
-            "I have 100+ skills, MEV awareness, sybil scoring, "
+            "I have 186 skills across 10 tiers — 71 technical indicators, "
+            "backtest engine, hyperopt, multi-agent debate, "
             "and a memory that learns from every trade.\n\n"
             "*Quick start:*\n"
             "• `/intro` — read Àkànjí's full origin story\n"
@@ -258,7 +259,7 @@ class Agent:
             "• `/analyze ETH 2` — deep analysis + bot's TP/SL\n"
             "• `/autotrade 2` — I scan the market, pick the best, execute\n"
             "• `/strategist start` — autonomous mode on a loop\n"
-            "• `/skills` — list my 100+ skills\n"
+            "• `/skills` — list my 186 skills\n"
             "• `/llm` — confirm I'm running on Qwen 3.6 Plus\n"
             "• `/help` — full command list\n\n"
             "Your keys never leave your machine. I'm a self-hostable open-source bot. "
@@ -348,7 +349,7 @@ class Agent:
             "• `/review` — last 7 days, with lessons learned\n\n"
             "*Intelligence:*\n"
             "• `/price SYMBOL` — current price + 24h stats\n"
-            "• `/skills` — list all 100+ skills\n"
+            "• `/skills` — list all 186 skills\n"
             "• `/skill NAME` — invoke a specific skill\n"
             "• `/mev TOKEN` — check MEV exposure\n"
             "• `/sybil 0x...` — score a wallet\n\n"
@@ -388,7 +389,7 @@ class Agent:
             "• *Storage:* SQLite (local file)\n"
             "• *Code:* Python 3.10+, open-source, MIT\n\n"
             "*Differentiation:*\n"
-            "• *100+ skills* organized in 9 tiers (vs typical 5-10)\n"
+            "• *186 skills* organized in 10 tiers (vs typical 5-10) — including 71 technical indicators\n"
             "• *MEV-aware execution* — checks sandwich-attack risk before every swap\n"
             "• *Sybil counterparty scoring* — refuses rug-prone tokens\n"
             "• *Recursive self-improvement* — reviews past trades, writes new rules to memory\n"

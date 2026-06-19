@@ -12,7 +12,7 @@
 
 ## What is this?
 
-Oniṣòwò is an autonomous trading agent that runs in **your** Telegram, trading on **your** Bitget account, with **your** money — but driven by **Qwen 3.6 Plus**, an AI brain that uses 100+ skills to make decisions.
+Oniṣòwò is an autonomous trading agent that runs in **your** Telegram, trading on **your** Bitget account, with **your** money — but driven by **Qwen 3.6 Plus**, an AI brain that uses 186 skills to make decisions.
 
 It's a real **trader** that thinks before it acts: it checks MEV exposure before every swap, scores counterparties for sybil risk, and gets better at trading the more it runs. Every reasoning call — *“is this a good entry?”*, *“what’s the risk here?”*, *“should I cut this position?”* — goes through Qwen.
 
@@ -60,24 +60,26 @@ That's it. Your bot is live.
 | `/status` | Your portfolio + P&L |
 | `/buy SOL 100` | Buy $100 of SOL (with reasoning + safety checks) |
 | `/sell BTC 50` | Sell $50 of BTC |
-| `/skills` | List all 100+ skills |
+| `/skills` | List all 186 skills |
 | `/risk` | Show current risk engine state |
 | `/journal` | Recent trade journal with reasoning |
 | `/help` | Full command list |
 
-## The 100+ skills (architecture)
+## The 186 skills (architecture)
 
-Oniṣòwò is composed of **100+ skills** organized by layer:
+Oniṣòwò is composed of **186 skills** organized by layer:
 
 | Layer | Count | Examples |
 |---|---|---|
-| Core trading (Bitget API) | 15 | place_order, cancel_order, get_balance, get_ticker |
-| Risk & safety | 12 | max_trade_check, drawdown_kill, exposure_cap, position_sizer |
-| Onchain intelligence | 20 | mev_exposure, sybil_score, holder_analysis, contract_safety |
-| Market intelligence | 15 | funding_rate, oi_delta, long_short_ratio, liquidation_heatmap |
-| Strategy / decision | 15 | momentum_signal, mean_reversion_signal, edge_estimator, thesis_writer |
-| Agent meta | 10 | recursive_improvement, journal_writer, prompt_tuner, confidence_calibrator |
-| Telegram surface | 5 | parse_message, send_alert, ask_approval, send_chart, send_voice_summary |
+| Core trading (Bitget API) | 17 | place_order, cancel_order, get_balance, get_ticker |
+| Risk & safety | 15 | max_trade_check, drawdown_kill, exposure_cap, position_sizer, liquidity_depth |
+| **Technical indicators** | **71** | **Ichimoku, SuperTrend, Parabolic SAR, MACD, RSI, BB, Stoch, ADX, VWAP, OBV, CMF, Hurst, Beta, +60 more** |
+| Market intelligence | 21 | funding_rate, oi_delta, long_short_ratio, liquidation_heatmap, regime_detector |
+| Strategy / decision | 19 | momentum_signal, mean_reversion_signal, edge_estimator, thesis_writer |
+| **New CEX-only skills** | **5** | **backtest, hyperopt, bull_bear_debate, polymarket_signal, strategy_template** |
+| Sentiment / news | 11 | news_fetch, social_sentiment, narrative_detector |
+| Agent meta | 14 | recursive_improvement, journal_writer, prompt_tuner, confidence_calibrator |
+| User-facing | 5 | parse_message, send_alert, ask_approval, send_chart, send_voice_summary |
 | Utility | 8+ | normalize_data, retry_with_backoff, format_pnl, etc. |
 
 Each skill is a **callable function** with input schema, output schema, and a docstring. The agent brain (**Qwen 3.6 Plus**) decides which to call, in which order, and how to combine them.

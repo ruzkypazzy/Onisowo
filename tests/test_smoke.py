@@ -62,8 +62,8 @@ class TestSkillsRegistry(unittest.TestCase):
             categories.add(skill.category)
 
         expected = {
-            "core_trading", "risk", "onchain", "market_intel",
-            "sentiment", "strategy", "agent_meta", "user_facing", "utility"
+            "core_trading", "risk", "indicators", "market_intel",
+            "sentiment", "strategy", "strategy_new", "agent_meta", "user_facing", "utility"
         }
         self.assertTrue(expected.issubset(categories), f"Missing categories: {expected - categories}")
         print(f"  ✓ All {len(expected)} categories present")
@@ -937,6 +937,101 @@ class TestWATGreeting(unittest.TestCase):
         print(f"  ✓ suggest_position_size scales: $10→$2.50, $1k→$250, $10k→$2.5k (same 25% cap)")
 
         print(f"  ✓ suggest_position_size: respects user amount, caps at max, rejects too-small balance")
+
+    def test_indicators_smoke(self):
+        """All 71 technical indicators compute without crashing on synthetic data."""
+        from skills import indicators as ind
+        import math
+
+        # 100-bar synthetic uptrending series
+        closes = [100 + i * 0.5 + (i % 7) * 0.1 for i in range(100)]
+        highs = [c + 1 for c in closes]
+        lows = [c - 1 for c in closes]
+        vols = [1000 + i * 10 for i in range(100)]
+        bench = [c * 0.9 for c in closes]
+
+        # Run each indicator and assert it doesn't raise
+        tests = [
+            ("ichimoku", lambda: ind.ichimoku(closes, highs, lows)),
+            ("supertrend", lambda: ind.supertrend(closes, highs, lows)),
+            ("parabolic_sar", lambda: ind.parabolic_sar(highs, lows)),
+            ("aroon", lambda: ind.aroon(highs, lows)),
+            ("vortex", lambda: ind.vortex(highs, lows, closes)),
+            ("ttm_squeeze", lambda: ind.ttm_squeeze(closes, highs, lows)),
+            ("qqe", lambda: ind.qqe(closes)),
+            ("halftrend", lambda: ind.halftrend(closes, highs, lows)),
+            ("alligator", lambda: ind.alligator(highs, lows)),
+            ("gator", lambda: ind.gator(highs, lows)),
+            ("dmi", lambda: ind.dmi(highs, lows, closes)),
+            ("aroon_oscillator", lambda: ind.aroon_oscillator(highs, lows)),
+            ("dpo", lambda: ind.dpo(closes)),
+            ("eom", lambda: ind.eom(closes, highs, lows, vols)),
+            ("tsi", lambda: ind.tsi(closes)),
+            ("stochastic", lambda: ind.stochastic(highs, lows, closes)),
+            ("stoch_rsi", lambda: ind.stoch_rsi(closes)),
+            ("williams_r", lambda: ind.williams_r(highs, lows, closes)),
+            ("cci", lambda: ind.cci(highs, lows, closes)),
+            ("mfi", lambda: ind.mfi(highs, lows, closes, vols)),
+            ("roc", lambda: ind.roc(closes)),
+            ("momentum", lambda: ind.momentum_indicator(closes)),
+            ("ao", lambda: ind.ao(highs, lows)),
+            ("apo", lambda: ind.apo(closes)),
+            ("ppo", lambda: ind.ppo(closes)),
+            ("ult_osc", lambda: ind.ult_osc(highs, lows, closes)),
+            ("rsi_divergence", lambda: ind.rsi_divergence(closes)),
+            ("macd_signal_cross", lambda: ind.macd_signal_cross(closes)),
+            ("coppock", lambda: ind.coppock(closes)),
+            ("fisher_transform", lambda: ind.fisher_transform(highs, lows)),
+            ("atr", lambda: ind.atr(highs, lows, closes)),
+            ("natr", lambda: ind.natr(highs, lows, closes)),
+            ("bollinger_width", lambda: ind.bollinger_width(closes)),
+            ("bollinger_pct_b", lambda: ind.bollinger_pct_b(closes)),
+            ("keltner", lambda: ind.keltner(closes, highs, lows)),
+            ("donchian", lambda: ind.donchian(highs, lows)),
+            ("chandelier", lambda: ind.chandelier(highs, lows, closes)),
+            ("historical_volatility", lambda: ind.historical_volatility(closes)),
+            ("ulcer_index", lambda: ind.ulcer_index(closes)),
+            ("stddev", lambda: ind.stddev(closes)),
+            ("chaikin_volatility", lambda: ind.chaikin_volatility(highs, lows)),
+            ("obv", lambda: ind.obv(closes, vols)),
+            ("ad_line", lambda: ind.ad_line(highs, lows, closes, vols)),
+            ("adosc", lambda: ind.adosc(highs, lows, closes, vols)),
+            ("cmf", lambda: ind.cmf(highs, lows, closes, vols)),
+            ("vwap", lambda: ind.vwap(highs, lows, closes, vols)),
+            ("vwma", lambda: ind.vwma(closes, vols)),
+            ("emv", lambda: ind.emv(highs, lows, vols)),
+            ("fi", lambda: ind.fi(closes, vols)),
+            ("nvi", lambda: ind.nvi(closes, vols)),
+            ("pvi", lambda: ind.pvi(closes, vols)),
+            ("pvt", lambda: ind.pvt(closes, vols)),
+            ("volume_profile", lambda: ind.volume_profile(closes, vols)),
+            ("kama", lambda: ind.kama(closes)),
+            ("frama", lambda: ind.frama(closes)),
+            ("alma", lambda: ind.alma(closes)),
+            ("hma", lambda: ind.hma(closes)),
+            ("mcginley", lambda: ind.mcginley(closes)),
+            ("t3", lambda: ind.t3(closes)),
+            ("zlema", lambda: ind.zlema(closes)),
+            ("tema", lambda: ind.tema(closes)),
+            ("smma", lambda: ind.smma(closes)),
+            ("garman_klass", lambda: ind.garman_klass(highs, lows)),
+            ("beta", lambda: ind.beta(closes, bench)),
+            ("correlation", lambda: ind.correlation(closes, bench)),
+            ("hurst", lambda: ind.hurst(closes)),
+            ("linear_regression", lambda: ind.linear_regression(closes)),
+            ("zscore", lambda: ind.zscore(closes)),
+            ("skew", lambda: ind.skew(closes)),
+            ("kurtosis", lambda: ind.kurtosis(closes)),
+            ("variance", lambda: ind.variance(closes)),
+            ("quantile", lambda: ind.quantile(closes)),
+        ]
+        for name, fn in tests:
+            try:
+                result = fn()
+                self.assertIsInstance(result, dict)
+            except Exception as e:
+                self.fail(f"Indicator {name!r} crashed: {e}")
+        print(f"  ✓ All {len(tests)} indicators compute cleanly on synthetic data")
 
     def test_fuzzy_skill_match(self):
         """Fuzzy match: get_price → get_ticker, balance → get_balance, etc."""

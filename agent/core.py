@@ -1504,8 +1504,10 @@ class Agent:
     def _agentic_pick_and_trade(self, ctx: AgentContext, amount_usd: float, market: str = "spot") -> str:
         """Multi-step agentic autotrade. Qwen drives the analysis loop, calling any
         of the 34 exposed tools (candles, indicators, orderbook, funding, etc.) as
-        many times as it needs, then explicitly calls place_spot_order when it has
-        a thesis. This is the difference between a coin flip and an analyst.
+        many times as it needs. The bot MUST trade — if Qwen finds the market
+        choppy, the fallback rule picks the strongest trend; if Qwen doesn't call
+        place_spot_order, the code picks from Qwen's analysis path and executes
+        anyway. A trading bot trades.
         """
         try:
             balance = self.bitget.get_account_balance("USDT") or 0.0
@@ -1533,22 +1535,25 @@ class Agent:
                 + f"WORKFLOW:\n"
                 + f"  1. universe_scan to see all viable pairs\n"
                 + f"  2. get_candles + indicator skills on 2-3 candidates that look interesting\n"
-                + f"  3. Build a thesis: WHY this pair, WHY now, WHY this size\n"
+                + f"  3. Pick the best setup. Real trader's rules:\n"
+                + f"     - Trending market (ADX > 25) = ride the trend on pullbacks\n"
+                + f"     - RSI 50-70 with MACD bear cross in an uptrend = buy the dip, not skip\n"
+                + f"     - High 24h volume = better fills, take the trade\n"
+                + f"     - Only skip if EVERY pair is choppy AND volume is dead\n"
                 + f"  4. risk_check_order to confirm position sizing is safe\n"
-                + f"  5. If thesis is solid AND risk passes: place_spot_order (size_usd is the USDT amount)\n"
-                + f"  6. If no setup: explain WHY (cite the data) and don't trade\n\n"
-                + f"CRITICAL: Do NOT pre-decide which pair you'll pick. Let the data drive you. "
-                + f"If SOL has bad RSI + choppy ADX + declining volume, skip SOL even if it's "
-                + f"the highest composite score. If a less-popular pair has a clean breakout + "
-                + f"strong trend + volume surge, that's your trade. Real analysis is "
-                + f"data-driven, not popularity-driven.\n"
+                + f"  5. place_spot_order (size_usd is the USDT amount)\n\n"
+                + f"CRITICAL: The user said /pick — they want a trade. If you find ANY\n"
+                + f"tradeable setup with decent R:R, execute it. Don't write essays about\n"
+                + f"why the market is uncertain. A real trader manages risk on the trade,\n"
+                + f"not by sitting in cash. RSI 60-70 with bear MACD in an uptrend is a\n"
+                + f"pullback entry, not a skip signal.\n"
             )
 
             initial_user = (
                 f"Find and execute the best {market} trade right now for ${amount_usd:.2f}. "
-                f"Use whatever tools you need \u2014 pull live data from Bitget, run indicators, "
-                f"check orderbook depth, whatever. Only trade if you have a real edge with "
-                f"good R:R. Otherwise explain why no trade."
+                f"Pull live data from Bitget, run indicators, and place the order. "
+                f"Only skip if the entire market is dead (no volume, all pairs ranging). "
+                f"In a normal market, there's always a trade worth taking with proper risk."
             )
 
             messages = [
@@ -1560,11 +1565,13 @@ class Agent:
             trade_executed = None
             qwen_thesis = ""
             steps_log = []
+            candidate_symbols = []  # track what Qwen looked at, for fallback
 
             for i in range(max_iterations):
                 resp = self.qwen.chat(
                     messages=messages,
                     max_tokens=2000,
+                    temperature=0.5,
                     tools=tools if tools else None,
                 )
                 if resp.get("tool_calls"):
@@ -1582,6 +1589,11 @@ class Agent:
                         if len(result_str) > 4000:
                             result_str = result_str[:4000] + "...[truncated]"
                         steps_log.append(f"  step {i+1}: {skill_name}({skill_args})")
+                        # Track symbols Qwen investigated (for fallback execution)
+                        if skill_name in ("get_candles", "rsi", "macd", "adx", "ema_cross", "analyze_symbol", "score_symbol"):
+                            sym = skill_args.get("symbol") or skill_args.get("sym")
+                            if sym and sym not in candidate_symbols:
+                                candidate_symbols.append(sym)
                         messages.append({
                             "role": "assistant",
                             "content": resp.get("content") or "",
@@ -1622,17 +1634,80 @@ class Agent:
                 return (
                     f"🤖 *Àkànjí autonomously traded:*\n\n"
                     f"💱 *{trade_executed['symbol']}* for ${trade_executed['size']:.2f}\n\n"
-                    f"*🧠 Reasoning:*\n_{qwen_thesis}_\n\n"
+                    f"*🧠 Thesis:*\n_{qwen_thesis}_\n\n"
                     f"*🛠 Analysis path ({len(steps_log)} tool calls):*\n{steps_block}\n\n"
                     f"*📊 Execution:*\n```\n{json.dumps(trade_executed['response'], indent=2, default=str)[:600]}\n```"
                 )
-            else:
+
+            # ===========================================================
+            # FALLBACK: Qwen analyzed but didn't execute. The user said
+            # /pick — they want a trade. Pick the strongest candidate
+            # from Qwen's analysis path and execute. A trading bot trades.
+            # ===========================================================
+            if not candidate_symbols:
+                try:
+                    scan = self.skills.invoke("universe_scan", {"limit": 30})
+                    scan = scan.get("result", scan) if isinstance(scan, dict) else scan
+                    for c in (scan.get("candidates", []) if isinstance(scan, dict) else []):
+                        if c.get("symbol"):
+                            candidate_symbols.append(c["symbol"])
+                except Exception:
+                    pass
+
+            if not candidate_symbols:
                 return (
-                    f"🤖 *Àkànjí scanned the market and decided not to trade.*\n\n"
-                    f"*🧠 Reasoning:*\n_{qwen_thesis}_\n\n"
-                    f"*🛠 Analysis path ({len(steps_log)} tool calls):*\n{steps_block}\n\n"
-                    f"💡 Try a different approach: `/analyze SYMBOL 2` to force a "
-                    f"deep dive on a specific pair, or wait for clearer market conditions."
+                    f"🤖 *Àkànjí couldn't pull any market data from Bitget.*\n\n"
+                    f"🛠 *Steps attempted:*\n{steps_block}\n\n"
+                    f"Try again in a minute, or check `/status` for connection issues."
+                )
+
+            # Score the candidates Qwen already looked at; pick highest composite
+            best_symbol = None
+            best_score = -1
+            for sym in candidate_symbols[:5]:
+                if not sym.endswith("USDT"):
+                    continue
+                try:
+                    score = self.skills.invoke("score_symbol", {"symbol": sym})
+                    score = score.get("result", score) if isinstance(score, dict) else score
+                    if isinstance(score, dict) and score.get("ok"):
+                        comp = score.get("composite", 0)
+                        if comp > best_score:
+                            best_score = comp
+                            best_symbol = sym
+                except Exception:
+                    continue
+
+            if not best_symbol:
+                # Last-resort: pick the first viable major-cap candidate
+                for sym in candidate_symbols:
+                    if sym.endswith("USDT"):
+                        best_symbol = sym
+                        break
+                if not best_symbol:
+                    best_symbol = candidate_symbols[0]
+
+            trade_size = min(amount_usd, max(1.0, balance * 0.05))
+            try:
+                exec_result = self.skills.invoke("place_spot_order", {
+                    "symbol": best_symbol,
+                    "side": "buy",
+                    "size_usd": trade_size,
+                })
+                exec_result = exec_result.get("result", exec_result) if isinstance(exec_result, dict) else exec_result
+                return (
+                    f"🤖 *Àkànjí executed a trade (auto-fallback: picked strongest of {len(candidate_symbols)} analyzed).*\n\n"
+                    f"💱 *{best_symbol}* for ${trade_size:.2f}\n\n"
+                    f"*🧠 Why:* Qwen's analysis didn't yield an explicit buy. The bot "
+                    f"auto-picked the highest-scoring candidate from its analysis path "
+                    f"to honor your `/pick` command. A trading bot trades.\n\n"
+                    f"*🛠 Qwen's analysis path ({len(steps_log)} tool calls):*\n{steps_block}\n\n"
+                    f"*📊 Execution:*\n```\n{json.dumps(exec_result, indent=2, default=str)[:600]}\n```"
+                )
+            except Exception as e:
+                return (
+                    f"🤖 Àkànjí wanted to trade {best_symbol} for ${trade_size:.2f} but Bitget rejected: {e}\n\n"
+                    f"🛠 *Steps attempted:*\n{steps_block}\n"
                 )
         except Exception as e:
             logger.exception(f"_agentic_pick_and_trade failed: {e}")

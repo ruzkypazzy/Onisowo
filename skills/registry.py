@@ -1210,9 +1210,18 @@ class SkillsRegistry:
     # =========================================================================
 
     def _s_place_spot_order(self, symbol: str, side: str, size_usd: float) -> dict:
+        # Defense in depth: enforce Bitget's $1 USDT minimum here too.
+        # If Qwen calls this with $0.55 (which is below the min), we bump it
+        # to $1 automatically rather than letting Bitget reject with 400.
+        try:
+            size_val = float(size_usd)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": f"Invalid size_usd: {size_usd}"}
+        if size_val < 1.0 and side.lower() == "buy":
+            size_val = 1.0
         return self.bitget.place_spot_order(
             symbol=symbol, side=side, order_type="market",
-            quote_size=str(size_usd) if side == "buy" else None,
+            quote_size=str(size_val) if side == "buy" else None,
         )
 
     def _s_cancel_order(self, order_id: str, symbol: str) -> dict:

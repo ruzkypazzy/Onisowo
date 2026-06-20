@@ -1744,22 +1744,51 @@ class Agent:
                 return f"❌ Couldn't find a setup: {result.get('error', 'unknown')}"
 
             qwen_pick = result.get("qwen_pick")
+            qwen_reasoning = result.get("qwen_reasoning", "")
+            suggested_tp_sl = result.get("suggested_tp_sl") or {}
             ranked = result.get("ranked", [])
 
-            # If Qwen explicitly skipped, fall back to the top-ranked (real crypto) symbol
-            if (not qwen_pick or qwen_pick == "SKIP") and ranked:
-                # Only use symbols that look like real crypto (USDT pairs)
-                real = [r for r in ranked if r.get("symbol", "").endswith("USDT")]
-                if real:
-                    qwen_pick = real[0]["symbol"]
-                    confidence = real[0].get("composite", 0.5)
-                else:
-                    return "❌ No real crypto candidates qualified. Try a manual /buy instead."
-            else:
-                confidence = result.get("qwen_confidence", 0.5)
+            # Build the visible scan table — show user the actual analysis
+            scan_lines = ["*🔍 Universe scan — top 5 by 9-signal composite:*\n"]
+            for i, r in enumerate(ranked, 1):
+                sym = r.get("symbol", "?")
+                comp = r.get("composite", 0)
+                price = r.get("current_price", 0)
+                chg = r.get("change_24h_pct", 0)
+                vol = r.get("volume_24h", 0)
+                t = r.get("technicals", {})
+                bits = []
+                if "rsi_14" in t:
+                    bits.append(f"RSI {t['rsi_14']}")
+                if "macd_hist" in t:
+                    bits.append(f"MACD {t['macd_hist']:+.4f}")
+                if "adx_14" in t:
+                    bits.append(f"ADX {t['adx_14']}")
+                if "ema_cross" in t and t["ema_cross"] != "none":
+                    bits.append(f"EMA {t['ema_cross']}")
+                if "atr_pct" in t:
+                    bits.append(f"ATR {t['atr_pct']}%")
+                line = (
+                    f"  {i}. *{sym}* — score {comp:.2f}, "
+                    f"${price:.4f} ({chg:+.2f}% 24h), vol ${vol/1e6:.1f}M"
+                )
+                if bits:
+                    line += "\n     techs: " + " · ".join(bits)
+                scan_lines.append(line)
+            scan_block = "\n".join(scan_lines) + "\n"
 
+            # If Qwen explicitly skipped
             if not qwen_pick or qwen_pick == "SKIP":
-                return "❌ No setup worth trading. The market is choppy — try again later or pick a pair manually with /analyze SYMBOL 2."
+                return (
+                    scan_block
+                    + f"\n*🧠 Qwen decision:* SKIP\n"
+                    + f"_{qwen_reasoning}_\n\n"
+                    + f"❌ No setup worth trading right now. The market is choppy or "
+                    + f"no candidate has a clear edge. Try again later, or `/analyze SYMBOL 2` "
+                    + f"to dig into a specific pair."
+                )
+
+            confidence = result.get("qwen_confidence", 0.5)
 
             # 2. Use the smart position sizer to compute the actual size
             balance = self.bitget.get_account_balance("USDT")
@@ -1777,6 +1806,11 @@ class Agent:
             size_suggestion = size_suggestion.get("result", size_suggestion) if isinstance(size_suggestion, dict) else size_suggestion
             final_size = size_suggestion.get("size_usd", amount_usd) or amount_usd
 
+            # Show TP/SL from the suggestion so user can see risk:reward before execution
+            tp_pct = suggested_tp_sl.get("take_profit_pct", 0) if isinstance(suggested_tp_sl, dict) else 0
+            sl_pct = suggested_tp_sl.get("stop_loss_pct", 0) if isinstance(suggested_tp_sl, dict) else 0
+            rr = suggested_tp_sl.get("risk_reward_ratio", 0) if isinstance(suggested_tp_sl, dict) else 0
+
             # 3. Execute the trade via the regular _handle_trade flow
             fake_ctx = AgentContext(
                 user_id=ctx.user_id,
@@ -1784,14 +1818,24 @@ class Agent:
                 command="buy",
                 args={"symbol": qwen_pick, "amount_usd": final_size},
             )
-            header = (
-                f"🤖 *Àkànjí picked:* *{qwen_pick}* (top ranked, conf {confidence:.2f})\n"
+
+            decision_block = (
+                f"\n*🧠 Qwen decision:* *{qwen_pick}* (conf {confidence:.2f})\n"
+                f"_{qwen_reasoning}_\n\n"
                 f"💰 *Size:* `${final_size:.2f}` "
-                f"(balance ${balance:.2f}, suggested by risk engine)\n"
-                f"📋 _{size_suggestion.get('rationale', '').strip()}_\n\n"
+                f"({final_size/balance*100:.1f}% of ${balance:.2f} balance)\n"
+                f"📋 _{size_suggestion.get('rationale', '').strip()}_\n"
             )
+            if tp_pct and sl_pct:
+                decision_block += (
+                    f"🎯 *Plan:* TP +{tp_pct:.1f}% / SL {sl_pct:.1f}% "
+                    f"(R:R {rr:.2f}:1)\n\n"
+                )
+            else:
+                decision_block += "\n"
+
             execution = self._handle_trade(fake_ctx, side="buy")
-            return header + execution
+            return scan_block + decision_block + execution
         except Exception as e:
             logger.exception(f"_auto_pick_and_trade failed: {e}")
             return f"❌ Auto-trade failed: {e}"

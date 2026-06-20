@@ -2423,7 +2423,11 @@ class SkillsRegistry:
     def _s_find_best_trade(self, amount_usd: float, max_candidates: int = 10) -> dict:
         """Autonomous mode: scan universe, score top candidates, ask Qwen for the final pick.
 
-        Returns: {ok, ranked: [...], qwen_pick, qwen_confidence, qwen_reasoning, suggested_tp_sl}
+        Each candidate gets a per-symbol deep dive: 1h candles, RSI/MACD/BB/ADX/EMA,
+        regime classification. Qwen sees the actual indicator readings, not just a
+        composite score, so its reasoning is grounded in real technicals.
+
+        Returns: {ok, ranked, qwen_pick, qwen_confidence, qwen_reasoning, suggested_tp_sl}
         """
         try:
             universe = self._s_universe_scan(limit=50)
@@ -2433,21 +2437,73 @@ class SkillsRegistry:
             if not candidates:
                 return {"ok": False, "error": "No tradeable candidates"}
 
-            # Score each one
+            # Score each one + pull per-symbol technicals for the Qwen prompt
             ranked = []
             for c in candidates:
                 sym = c["symbol"]
                 try:
                     score = self._s_score_symbol(symbol=sym)
-                    if score.get("ok"):
-                        ranked.append({
-                            "symbol": sym,
-                            "composite": score.get("composite", 0),
-                            "sub_scores": score.get("sub_scores", {}),
-                            "current_price": c.get("last_price", 0),
-                            "change_24h_pct": c.get("change_24h_pct", 0),
-                            "volume_24h": c.get("volume_24h_usd", 0),
-                        })
+                    if not score.get("ok"):
+                        continue
+
+                    # Per-symbol deep dive: call the canonical indicator skills
+                    # so Qwen sees the same values the rest of the bot uses.
+                    techs = {}
+                    try:
+                        rsi = self._s_rsi(symbol=sym, period=14)
+                        if isinstance(rsi, dict) and "rsi" in rsi:
+                            techs["rsi_14"] = round(rsi["rsi"], 1)
+                    except Exception:
+                        pass
+                    try:
+                        macd = self._s_macd(symbol=sym)
+                        if isinstance(macd, dict):
+                            techs["macd_hist"] = round(macd.get("histogram", 0) or 0, 4)
+                            techs["macd_signal_cross"] = (
+                                "bull" if (macd.get("macd", 0) or 0) > (macd.get("signal", 0) or 0)
+                                else "bear"
+                            )
+                    except Exception:
+                        pass
+                    try:
+                        bb = self._s_bollinger(symbol=sym, period=20)
+                        if isinstance(bb, dict) and bb.get("upper"):
+                            techs["bb_position"] = bb.get("position", "within_bands")
+                    except Exception:
+                        pass
+                    try:
+                        adx = self._s_adx(symbol=sym, period=14)
+                        if isinstance(adx, dict) and adx.get("adx"):
+                            techs["adx_14"] = round(adx["adx"], 1)
+                            techs["trend_strength"] = adx.get("interpretation", "unknown")
+                    except Exception:
+                        pass
+                    try:
+                        ema = self._s_ema_cross(symbol=sym, fast=9, slow=21)
+                        if isinstance(ema, dict):
+                            techs["ema_cross"] = (
+                                "bull" if ema.get("crossover") == "bullish"
+                                else "bear" if ema.get("crossover") == "bearish"
+                                else "none"
+                            )
+                    except Exception:
+                        pass
+                    try:
+                        atr = self._s_atr(symbol=sym, period=14)
+                        if isinstance(atr, dict) and atr.get("atr_pct"):
+                            techs["atr_pct"] = round(atr["atr_pct"], 2)
+                    except Exception:
+                        pass
+
+                    ranked.append({
+                        "symbol": sym,
+                        "composite": score.get("composite", 0),
+                        "sub_scores": score.get("sub_scores", {}),
+                        "current_price": c.get("last_price", 0),
+                        "change_24h_pct": c.get("change_24h_pct", 0),
+                        "volume_24h": c.get("volume_24h_usd", 0),
+                        "technicals": techs,
+                    })
                 except Exception:
                     continue
             # Sort by composite
@@ -2457,33 +2513,61 @@ class SkillsRegistry:
             if not top_n:
                 return {"ok": False, "error": "No candidates scored above threshold"}
 
-            # Ask Qwen for the final pick
+            # Ask Qwen for the final pick — WITH the actual technicals this time
             qwen_pick = None
             qwen_conf = 0.0
             qwen_reasoning = ""
             try:
                 lines = []
                 for i, r in enumerate(top_n):
-                    lines.append(
+                    parts = [
                         f"#{i+1} {r['symbol']}: composite={r['composite']:.2f}, "
                         f"price=${r['current_price']:.4f}, 24h={r['change_24h_pct']:+.2f}%, "
                         f"vol=${r['volume_24h']:,.0f}"
-                    )
+                    ]
+                    t = r.get("technicals", {})
+                    if t:
+                        bits = []
+                        if "rsi_14" in t:
+                            bits.append(f"RSI={t['rsi_14']}")
+                        if "macd_hist" in t:
+                            bits.append(f"MACD_hist={t['macd_hist']:+.4f}({t.get('macd_signal_cross', '?')})")
+                        if "bb_position" in t:
+                            bits.append(f"BB={t['bb_position']}")
+                        if "adx_14" in t:
+                            bits.append(f"ADX={t['adx_14']}({t.get('trend_strength', '?')})")
+                        if "ema_cross" in t and t["ema_cross"] != "none":
+                            bits.append(f"EMA9/21={t['ema_cross']}")
+                        if "atr_pct" in t:
+                            bits.append(f"ATR={t['atr_pct']}%")
+                        if bits:
+                            parts.append("  techs: " + ", ".join(bits))
+                    lines.append("\n".join(parts))
                 prompt = (
-                    f"You are a senior trader. The user wants to deploy ${amount_usd:.2f} in a long position.\n\n"
-                    f"Top {len(top_n)} candidates by multi-signal score:\n"
+                    f"You are a senior crypto trader. The user wants to deploy "
+                    f"${amount_usd:.2f} in a long position on Bitget spot.\n\n"
+                    f"Top {len(top_n)} candidates (scored by 9-signal composite, "
+                    f"with real 1h technicals — RSI, MACD, Bollinger, ADX, EMA, ATR):\n\n"
                     + "\n".join(lines) +
-                    f"\n\nReturn EXACTLY 3 lines in this format:\n"
+                    f"\n\nPick the SINGLE best setup. Be selective — skip if no clear edge.\n"
+                    f"You MUST pick from the list above; do not invent new symbols.\n"
+                    f"Consider:\n"
+                    f"  - Trend: ADX>25 with bullish EMA cross = strong trend\n"
+                    f"  - Momentum: RSI 40-65 sweet spot for longs; >75 overbought\n"
+                    f"  - Volatility: ATR% tells you how much this pair swings\n"
+                    f"  - Volume: high 24h vol = better fills, less slippage\n"
+                    f"  - MACD histogram turning positive = momentum shift\n\n"
+                    f"Return EXACTLY 3 lines in this format:\n"
                     f"pick: SYMBOL (e.g. SOLUSDT) or 'skip'\n"
                     f"confidence: 0.0-1.0\n"
-                    f"reasoning: 2-3 sentences max\n"
+                    f"reasoning: 2-3 sentences citing the actual technicals you saw\n"
                 )
                 resp = self.qwen.chat(
                     messages=[
-                        {"role": "system", "content": "You are a senior trading analyst. Be selective. Skip if no clear edge."},
+                        {"role": "system", "content": "You are a senior crypto trading analyst. Ground every claim in the technicals provided. Be selective. Skip if no clear edge."},
                         {"role": "user", "content": prompt},
                     ],
-                    max_tokens=200,
+                    max_tokens=300,
                     temperature=0.3,
                 )
                 raw = resp["content"].strip()

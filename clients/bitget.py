@@ -115,7 +115,27 @@ class BitgetClient:
         except requests.exceptions.Timeout:
             raise BitgetAPIError(f"Bitget API timeout: {url}")
         except requests.exceptions.RequestException as e:
-            raise BitgetAPIError(f"Bitget API request failed: {e}")
+            # DEBUG: log + include the exact response body in the error so
+            # debugging 400s from a Telegram bot is possible.
+            response_body = ""
+            try:
+                if hasattr(e, 'response') and e.response is not None:
+                    response_body = e.response.text[:1000]
+                    logger.error(
+                        f"Bitget 4xx/5xx for {method} {url}: "
+                        f"body={body_str}, response_status={e.response.status_code}, "
+                        f"response_body={response_body}"
+                    )
+                else:
+                    logger.error(f"Bitget request error for {method} {url}: body={body_str}, error={e}")
+            except Exception:
+                pass
+            # Include response body in the raised error so it surfaces in
+            # the Telegram message — not just the generic "400 Client Error".
+            error_msg = f"Bitget API request failed: {e}"
+            if response_body:
+                error_msg += f" | Response: {response_body}"
+            raise BitgetAPIError(error_msg)
 
     # -------------------------------------------------------------------------
     # Public market data (no signing required, but uses same method)

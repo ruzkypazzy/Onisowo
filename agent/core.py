@@ -812,7 +812,7 @@ class Agent:
                     "  • `/pick spot` — spot market (default)\n"
                     "  • `/pick future 5` — futures market, $5 trade"
                 )
-        return self._auto_pick_and_trade(ctx, amount_usd=amount_usd, market=market)
+        return self._agentic_pick_and_trade(ctx, amount_usd=amount_usd, market=market)
 
     def _cmd_daily(self, ctx: AgentContext) -> str:
         """Alias for /pick. 'Daily' implies the user's preferred routine."""
@@ -829,6 +829,7 @@ class Agent:
             amount_usd = float(rest)
         except ValueError:
             return "❌ Usage: `/autotrade USDT_AMOUNT`\n\nExample: `/autotrade 2`"
+        return self._agentic_pick_and_trade(ctx, amount_usd=amount_usd)
 
         try:
             result = self.skills.invoke("find_best_trade", {"amount_usd": amount_usd, "max_candidates": 5})
@@ -1500,6 +1501,143 @@ class Agent:
             logger.exception(f"_cmd_reflect failed: {e}")
             return f"❌ Reflection failed: {e}"
 
+    def _agentic_pick_and_trade(self, ctx: AgentContext, amount_usd: float, market: str = "spot") -> str:
+        """Multi-step agentic autotrade. Qwen drives the analysis loop, calling any
+        of the 34 exposed tools (candles, indicators, orderbook, funding, etc.) as
+        many times as it needs, then explicitly calls place_spot_order when it has
+        a thesis. This is the difference between a coin flip and an analyst.
+        """
+        try:
+            balance = self.bitget.get_account_balance("USDT") or 0.0
+            try:
+                portfolio = self.bitget.get_portfolio_value_usdt()
+            except Exception:
+                portfolio = balance
+            btc_price = 0
+            try:
+                t = self.bitget.get_ticker("BTCUSDT")
+                btc_price = t.get("last", 0) if isinstance(t, dict) else 0
+            except Exception:
+                pass
+
+            system_msg = (
+                SYSTEM_PROMPT
+                + f"\n\nYou are running in AUTONOMOUS TRADING MODE for a live Bitget account.\n"
+                + f"Account context:\n"
+                + f"  - USDT balance: ${balance:.2f}\n"
+                + f"  - Portfolio value: ${portfolio:.2f}\n"
+                + f"  - BTC spot: ${btc_price:,.2f}\n"
+                + f"  - Trade size for this run: ${amount_usd:.2f} (capped at risk engine limits)\n"
+                + f"  - Market: {market}\n\n"
+                + f"You have 34 tools available. Use them.\n\n"
+                + f"WORKFLOW:\n"
+                + f"  1. universe_scan to see all viable pairs\n"
+                + f"  2. get_candles + indicator skills on 2-3 candidates that look interesting\n"
+                + f"  3. Build a thesis: WHY this pair, WHY now, WHY this size\n"
+                + f"  4. risk_check_order to confirm position sizing is safe\n"
+                + f"  5. If thesis is solid AND risk passes: place_spot_order (size_usd is the USDT amount)\n"
+                + f"  6. If no setup: explain WHY (cite the data) and don't trade\n\n"
+                + f"CRITICAL: Do NOT pre-decide which pair you'll pick. Let the data drive you. "
+                + f"If SOL has bad RSI + choppy ADX + declining volume, skip SOL even if it's "
+                + f"the highest composite score. If a less-popular pair has a clean breakout + "
+                + f"strong trend + volume surge, that's your trade. Real analysis is "
+                + f"data-driven, not popularity-driven.\n"
+            )
+
+            initial_user = (
+                f"Find and execute the best {market} trade right now for ${amount_usd:.2f}. "
+                f"Use whatever tools you need \u2014 pull live data from Bitget, run indicators, "
+                f"check orderbook depth, whatever. Only trade if you have a real edge with "
+                f"good R:R. Otherwise explain why no trade."
+            )
+
+            messages = [
+                {"role": "system", "content": system_msg},
+                {"role": "user", "content": initial_user},
+            ]
+            tools = self.skills.get_tool_schemas()
+            max_iterations = 8
+            trade_executed = None
+            qwen_thesis = ""
+            steps_log = []
+
+            for i in range(max_iterations):
+                resp = self.qwen.chat(
+                    messages=messages,
+                    max_tokens=2000,
+                    tools=tools if tools else None,
+                )
+                if resp.get("tool_calls"):
+                    for tool_call in resp["tool_calls"]:
+                        skill_name = tool_call["function"]["name"]
+                        try:
+                            skill_args = json.loads(tool_call["function"]["arguments"])
+                        except Exception:
+                            skill_args = {}
+                        try:
+                            tool_result = self.skills.invoke(skill_name, skill_args)
+                        except Exception as e:
+                            tool_result = {"error": f"skill failed: {e}"}
+                        result_str = json.dumps(tool_result, default=str)
+                        if len(result_str) > 4000:
+                            result_str = result_str[:4000] + "...[truncated]"
+                        steps_log.append(f"  step {i+1}: {skill_name}({skill_args})")
+                        messages.append({
+                            "role": "assistant",
+                            "content": resp.get("content") or "",
+                            "tool_calls": [{
+                                "id": tool_call.get("id", f"call_{i}"),
+                                "type": "function",
+                                "function": {
+                                    "name": skill_name,
+                                    "arguments": tool_call["function"]["arguments"],
+                                },
+                            }],
+                        })
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tool_call.get("id", f"call_{i}"),
+                            "name": skill_name,
+                            "content": result_str,
+                        })
+                        if skill_name == "place_spot_order":
+                            try:
+                                inner = tool_result.get("result", tool_result) if isinstance(tool_result, dict) else tool_result
+                                if isinstance(inner, dict) and (inner.get("orderId") or inner.get("clientOid")):
+                                    trade_executed = {
+                                        "symbol": skill_args.get("symbol"),
+                                        "size": skill_args.get("size_usd"),
+                                        "response": inner,
+                                    }
+                            except Exception:
+                                pass
+                    continue
+                else:
+                    qwen_thesis = resp.get("content", "")
+                    break
+
+            steps_block = "\n".join(steps_log) if steps_log else "  (no tool calls)"
+
+            if trade_executed:
+                return (
+                    f"🤖 *Àkànjí autonomously traded:*\n\n"
+                    f"💱 *{trade_executed['symbol']}* for ${trade_executed['size']:.2f}\n\n"
+                    f"*🧠 Reasoning:*\n_{qwen_thesis}_\n\n"
+                    f"*🛠 Analysis path ({len(steps_log)} tool calls):*\n{steps_block}\n\n"
+                    f"*📊 Execution:*\n```\n{json.dumps(trade_executed['response'], indent=2, default=str)[:600]}\n```"
+                )
+            else:
+                return (
+                    f"🤖 *Àkànjí scanned the market and decided not to trade.*\n\n"
+                    f"*🧠 Reasoning:*\n_{qwen_thesis}_\n\n"
+                    f"*🛠 Analysis path ({len(steps_log)} tool calls):*\n{steps_block}\n\n"
+                    f"💡 Try a different approach: `/analyze SYMBOL 2` to force a "
+                    f"deep dive on a specific pair, or wait for clearer market conditions."
+                )
+        except Exception as e:
+            logger.exception(f"_agentic_pick_and_trade failed: {e}")
+            return f"❌ Agentic autotrade failed: {e}"
+
     def _cmd_ask(self, ctx: AgentContext) -> str:
         """Prompt bot: take any free-form text and act on it.
 
@@ -1561,7 +1699,7 @@ class Agent:
                             "  • `do proper analysis and pick a daily trade for $2`\n"
                             "  • `/autotrade 5`"
                         )
-                return self._auto_pick_and_trade(ctx, amount_usd=amount)
+                return self._agentic_pick_and_trade(ctx, amount_usd=amount)
 
             # 0b. "go with $X" / "place a trade" with a dollar amount but no symbol
             amount = None
@@ -1570,7 +1708,7 @@ class Agent:
             ):
                 amount = self._extract_dollar_amount(text)
                 if amount and amount > 0:
-                    return self._auto_pick_and_trade(ctx, amount_usd=amount)
+                    return self._agentic_pick_and_trade(ctx, amount_usd=amount)
 
             # 1. Detect trade intent via regex (fast, cheap)
             intent = self._extract_trade_intent(text)

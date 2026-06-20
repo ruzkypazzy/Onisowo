@@ -805,7 +805,7 @@ class Agent:
                 return "❌ No candidates scored above threshold. Try a single /pick instead."
 
             # Per-trade size = amount / n, but never less than $1
-            per_trade = max(1.0, amount_usd / len(picks))
+            per_trade = max(1.01, amount_usd / len(picks))
 
             lines = [
                 f"🤖 *Àkànjí multi-pick: {len(picks)} trades*\n",
@@ -1910,7 +1910,7 @@ class Agent:
                 if not best_symbol:
                     best_symbol = candidate_symbols[0]
 
-            trade_size = min(amount_usd, max(1.0, balance * 0.05))
+            trade_size = min(amount_usd, max(1.01, balance * 0.05))
             try:
                 exec_result = self.skills.invoke("place_spot_order", {
                     "symbol": best_symbol,

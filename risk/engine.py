@@ -317,13 +317,13 @@ class RiskEngine:
 
         # Never exceed 95% of balance
         final = min(final, balance_usd * 0.95)
-        # Never go below $1 (Bitget's actual minimum for spot market orders).
-        # Round UP to $1 if the computation lands below it, so the order still works
-        # on tiny accounts. Only block if even $1 exceeds 95% of balance.
-        BITGET_MIN_USDT = 1.0
+        # Never go below $1.01 (Bitget's actual account minimum — the docs
+        # say $1, but the real minimum in practice is $1.01. Anything below
+        # gets rejected with code 45110 'less than the minimum amount 1 USDT').
+        BITGET_MIN_USDT = 1.01
         if final < BITGET_MIN_USDT:
             if balance_usd >= BITGET_MIN_USDT:
-                # Bump up to Bitget's minimum
+                # Bump up to Bitget's real minimum
                 return {
                     "size_usd": round(BITGET_MIN_USDT, 2),
                     "rationale": (

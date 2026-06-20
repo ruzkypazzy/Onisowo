@@ -1819,9 +1819,20 @@ class Agent:
                             try:
                                 inner = tool_result.get("result", tool_result) if isinstance(tool_result, dict) else tool_result
                                 if isinstance(inner, dict) and (inner.get("orderId") or inner.get("clientOid")):
+                                    # Use the actual size that was executed (the wrapper
+                                    # may have bumped it). Check the request body in
+                                    # tool_result, fallback to skill_args.
+                                    actual_size = skill_args.get("size_usd")
+                                    # The wrapper bumps to at least 1.01 USDT
+                                    try:
+                                        size_val = float(actual_size) if actual_size is not None else 0
+                                        if size_val < 1.01:
+                                            actual_size = 1.01
+                                    except (TypeError, ValueError):
+                                        actual_size = 1.01
                                     trade_executed = {
                                         "symbol": skill_args.get("symbol"),
-                                        "size": skill_args.get("size_usd"),
+                                        "size": actual_size,
                                         "response": inner,
                                     }
                             except Exception:

@@ -1212,7 +1212,6 @@ class SkillsRegistry:
     def _s_place_spot_order(self, symbol: str, side: str, size_usd: float) -> dict:
         # Defense in depth: enforce Bitget's real minimum here too.
         # The docs say $1, but the actual account minimum is $1.01.
-        # Verified via direct API call: $1 → 45110, $1.01 → success.
         BITGET_REAL_MIN_USDT = 1.01
         try:
             size_val = float(size_usd)
@@ -1223,16 +1222,26 @@ class SkillsRegistry:
         # SAFETY: cap the trade size at the user's intended amount. If the
         # caller (Qwen) tries to use the entire balance, we cap at half
         # the balance minus a buffer, so the user always has USDT left.
-        # This prevents the bot from accidentally liquidating the account.
         try:
             current_balance = self.bitget.get_account_balance("USDT") or 0
-            if side.lower() == "buy" and current_balance > 0 and size_val > current_balance * 0.5:
-                original = size_val
-                size_val = round(current_balance * 0.4, 2)  # max 40% of balance
-                logger.warning(
-                    f"place_spot_order: capping size from ${original:.2f} to ${size_val:.2f} "
-                    f"(40% of ${current_balance:.2f} balance) to preserve USDT liquidity"
-                )
+            if side.lower() == "buy":
+                if current_balance < BITGET_REAL_MIN_USDT:
+                    return {
+                        "ok": False,
+                        "error": (
+                            f"Insufficient USDT balance: ${current_balance:.2f}. "
+                            f"Bitget's minimum order size is ${BITGET_REAL_MIN_USDT:.2f}. "
+                            f"Fund your account or sell some holdings (e.g. /sell SYMBOL $X) "
+                            f"to free up USDT."
+                        ),
+                    }
+                if size_val > current_balance * 0.5:
+                    original = size_val
+                    size_val = round(current_balance * 0.4, 2)  # max 40% of balance
+                    logger.warning(
+                        f"place_spot_order: capping size from ${original:.2f} to ${size_val:.2f} "
+                        f"(40% of ${current_balance:.2f} balance) to preserve USDT liquidity"
+                    )
         except Exception:
             pass
         return self.bitget.place_spot_order(

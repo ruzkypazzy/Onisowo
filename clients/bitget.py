@@ -195,26 +195,38 @@ class BitgetClient:
         order_type: str,  # "market" or "limit"
         size: Optional[str] = None,
         price: Optional[str] = None,
-        quote_size: Optional[str] = None,  # for market buy, specify USDT amount
+        quote_size: Optional[str] = None,  # for market buy, alias for size (USDT)
         client_oid: Optional[str] = None,
     ) -> dict:
         """Place a spot order.
 
-        For market buy: pass quote_size (e.g., "100" = $100 USDT)
-        For market sell: pass size (e.g., "0.01" = 0.01 BTC)
-        For limit: pass both size and price
+        Bitget V2 API expects:
+          For market buy: pass size = USDT amount (e.g. "100" = spend $100)
+          For market sell: pass size = base amount (e.g. "0.01" = sell 0.01 BTC)
+          For limit: pass size = base amount + price
+
+        IMPORTANT: For market orders, do NOT include `force` — Bitget rejects it
+        with 400 'invalid parameter' for orderType=market. Force is only valid for
+        limit orders. quote_size is accepted as an alias for size on market buy
+        (kept for backward compatibility) but the canonical field is `size`.
         """
+        # Canonical: `size` is USDT for market-buy, base for everything else.
+        # We accept `quote_size` as a friendlier alias for market-buy USDT.
+        if quote_size is not None and size is None:
+            size = quote_size
         body = {
             "symbol": symbol,
             "side": side,
             "orderType": order_type,
             "size": size,
-            "quoteSize": quote_size,
             "price": price,
             "clientOid": client_oid or f"onisowo-{int(time.time() * 1000)}",
-            "force": "gtc" if order_type == "limit" else "ioc",
         }
-        # Remove None values
+        # `force` is only valid for limit orders. Bitget rejects with 400
+        # if `force` is included with orderType=market.
+        if order_type == "limit" and price is not None:
+            body["force"] = "gtc"
+        # Remove None values so we never send null fields.
         body = {k: v for k, v in body.items() if v is not None}
         return self._request("POST", "/api/v2/spot/trade/place-order", body=body)
 

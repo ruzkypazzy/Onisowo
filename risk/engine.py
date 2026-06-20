@@ -317,13 +317,37 @@ class RiskEngine:
 
         # Never exceed 95% of balance
         final = min(final, balance_usd * 0.95)
-        # Never go below $0.50 (Bitget minimum for spot orders)
-        if final < 0.50:
+        # Never go below $1 (Bitget's actual minimum for spot market orders).
+        # Round UP to $1 if the computation lands below it, so the order still works
+        # on tiny accounts. Only block if even $1 exceeds 95% of balance.
+        BITGET_MIN_USDT = 1.0
+        if final < BITGET_MIN_USDT:
+            if balance_usd >= BITGET_MIN_USDT:
+                # Bump up to Bitget's minimum
+                return {
+                    "size_usd": round(BITGET_MIN_USDT, 2),
+                    "rationale": (
+                        f"Computed size ${final:.2f} was below Bitget's minimum order size. "
+                        f"Rounded up to ${BITGET_MIN_USDT:.2f}. "
+                        f"Your balance is ${balance_usd:.2f} — fund more to enable larger trades."
+                    ),
+                    "base": round(BITGET_MIN_USDT, 2),
+                    "confidence_factor": 0,
+                    "score_factor": 0,
+                    "pct_of_balance": round(BITGET_MIN_USDT / balance_usd * 100, 1) if balance_usd > 0 else 0,
+                }
             return {
                 "size_usd": 0,
                 "rationale": (
-                    f"Computed size ${final:.2f} is below Bitget's minimum order size. "
-                    f"Need at least $0.50. "
+                    f"Balance ${balance_usd:.2f} is below Bitget's minimum order size of ${BITGET_MIN_USDT:.2f}. "
+                    f"Fund your account with at least ${BITGET_MIN_USDT:.2f} to trade."
+                ),
+            }
+        return {
+            "size_usd": round(final, 2),
+            "rationale": (
+                f"Computed size ${final:.2f} for balance ${balance_usd:.2f}. "
+                f"Capped at 95% of balance."
                     f"Your balance is ${balance_usd:.2f} — try a smaller account or fund more."
                 ),
             }

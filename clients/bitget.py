@@ -458,6 +458,78 @@ class BitgetClient:
                 return self._request("POST", "/api/v2/mix/order/place-order", body=v2_body)
             raise
 
+    def place_strategy_order(
+        self,
+        symbol: str,
+        side: str,  # 'buy' or 'sell'
+        pos_side: str,  # 'long' or 'short'
+        order_type: str,  # 'market' or 'limit'
+        qty: str,
+        tp_price: Optional[str] = None,  # take profit price
+        sl_price: Optional[str] = None,  # stop loss price
+        tp_trigger_price: Optional[str] = None,
+        sl_trigger_price: Optional[str] = None,
+        leverage: Optional[str] = "5",
+        margin_mode: str = "crossed",
+        margin_coin: str = "USDT",
+        client_oid: Optional[str] = None,
+    ) -> dict:
+        """Place a futures order with TP/SL attached. V3 UTA endpoint.
+
+        POST /api/v3/trade/place-strategy-order
+
+        The TP/SL are attached to the order itself, so when the position
+        opens, both take profit and stop loss are already set.
+        """
+        body = {
+            "category": "USDT-FUTURES",
+            "symbol": symbol,
+            "marginMode": margin_mode,
+            "marginCoin": margin_coin,
+            "qty": qty,
+            "side": side,
+            "posSide": pos_side,
+            "orderType": order_type,
+            "leverage": leverage,
+            "clientOid": client_oid or f"onisowo-strat-{int(time.time() * 1000)}",
+        }
+        # Attach TP/SL if provided
+        if tp_price is not None or tp_trigger_price is not None:
+            body["tpPrice"] = tp_price or ""
+            body["tpTriggerPrice"] = tp_trigger_price or ""
+        if sl_price is not None or sl_trigger_price is not None:
+            body["slPrice"] = sl_price or ""
+            body["slTriggerPrice"] = sl_trigger_price or ""
+        body = {k: v for k, v in body.items() if v != ""}
+        try:
+            return self._request("POST", "/api/v3/trade/place-strategy-order", body=body)
+        except BitgetAPIError as e:
+            # If V3 strategy endpoint doesn't exist, fall back to V2
+            if "404" in str(e) or "NOT FOUND" in str(e):
+                # Convert to V2 format and use /api/v2/mix/order/placeOrder
+                v2_body = {
+                    "symbol": symbol,
+                    "productType": "USDT-FUTURES",
+                    "marginMode": margin_mode,
+                    "marginCoin": margin_coin,
+                    "size": qty,
+                    "side": side,
+                    "orderType": order_type,
+                    "leverage": leverage,
+                    "clientOid": body.get("clientOid"),
+                }
+                if tp_trigger_price:
+                    v2_body["tpTriggerPrice"] = tp_trigger_price
+                if sl_trigger_price:
+                    v2_body["slTriggerPrice"] = sl_trigger_price
+                if tp_price:
+                    v2_body["tpPrice"] = tp_price
+                if sl_price:
+                    v2_body["slPrice"] = sl_price
+                v2_body = {k: v for k, v in v2_body.items() if v is not None}
+                return self._request("POST", "/api/v2/mix/order/placeOrder", body=v2_body)
+            raise
+
     def set_leverage(self, symbol: str, leverage: str, product_type: str = "USDT-FUTURES") -> dict:
         """Set leverage for a futures symbol. CAUTION: leverage amplifies risk.
         Tries V3 (UTA) then V2 (classic)."""

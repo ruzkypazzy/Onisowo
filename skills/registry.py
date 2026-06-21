@@ -73,6 +73,7 @@ class SkillsRegistry:
         self._register(Skill("get_positions", "List all open futures positions", "core_trading", self._s_get_positions, {}))
         self._register(Skill("place_futures_order", "Place a futures (perps) order", "core_trading", self._s_place_futures_order, {"symbol": "str", "side": "str", "size": "float", "leverage": "int"}))
         self._register(Skill("place_futures_order_with_tracking", "Place futures order and record in journal with TP/SL", "core_trading", self._s_place_futures_order_with_tracking, {"symbol": "str", "side": "str", "size": "float", "leverage": "int"}))
+        self._register(Skill("place_futures_with_tpsl", "Place futures order with TP/SL attached (one atomic call)", "core_trading", self._s_place_futures_with_tpsl, {"symbol": "str", "side": "str", "size": "float", "leverage": "int", "tp_pct": "float", "sl_pct": "float"}))
         self._register(Skill("cancel_all_orders", "Cancel all open orders (panic button)", "core_trading", self._s_cancel_all_orders, {}))
         self._register(Skill("get_account_summary", "Full account summary (all assets + USDT value)", "core_trading", self._s_get_account_summary, {}))
         self._register(Skill("get_funding_rate", "Get current funding rate for a futures symbol", "core_trading", self._s_get_funding_rate, {"symbol": "str"}))
@@ -1424,6 +1425,80 @@ class SkillsRegistry:
             "journal": record,
             "leverage": leverage,
             "entry_price": entry_price,
+        }
+
+    def _s_place_futures_with_tpsl(self, symbol: str, side: str, size: float, leverage: int = 5,
+                                    tp_pct: float = 5.0, sl_pct: float = 2.5) -> dict:
+        """Place a futures order with TP/SL attached (one atomic call).
+
+        The order opens the position AND sets take profit / stop loss in
+        one Bitget call. Position auto-closes when TP or SL hits.
+
+        tp_pct: % above entry for take profit (e.g. 5.0 = +5%)
+        sl_pct: % below entry for stop loss (e.g. 2.5 = -2.5%)
+        """
+        # Get current price for TP/SL calculation
+        try:
+            ticker = self.bitget.get_ticker(symbol)
+            entry_price = float(ticker.get("last", 0)) if isinstance(ticker, dict) else 0
+        except Exception:
+            entry_price = 0
+        if entry_price <= 0:
+            return {"ok": False, "error": "Could not get current price for TP/SL calc"}
+        # Calculate TP and SL prices
+        if side == "buy":
+            pos_side = "long"
+            tp_price = entry_price * (1 + tp_pct / 100)
+            sl_price = entry_price * (1 - sl_pct / 100)
+        else:  # sell
+            pos_side = "short"
+            tp_price = entry_price * (1 - tp_pct / 100)
+            sl_price = entry_price * (1 + sl_pct / 100)
+        # Use the strategy order endpoint (V3 UTA)
+        try:
+            order_result = self.bitget.place_strategy_order(
+                symbol=symbol,
+                side=side,
+                pos_side=pos_side,
+                order_type="market",
+                qty=str(size),
+                tp_trigger_price=str(tp_price),
+                sl_trigger_price=str(sl_price),
+                tp_price=str(tp_price),
+                sl_price=str(sl_price),
+                leverage=str(leverage),
+            )
+        except Exception as e:
+            return {"ok": False, "error": f"Strategy order failed: {e}"}
+        # Record in journal
+        notional_usd = size * entry_price
+        order_id = ""
+        if isinstance(order_result, dict):
+            inner = order_result.get("data", order_result)
+            if isinstance(inner, dict):
+                order_id = inner.get("orderId") or inner.get("clientOid") or ""
+        record = self._s_record_trade(
+            symbol=symbol,
+            side=side,
+            size_usd=notional_usd,
+            price=entry_price,
+            order_id=order_id,
+            reason=f"futures {leverage}x with TP/SL",
+            thesis=f"futures {leverage}x, notional ${notional_usd:.2f}, TP +{tp_pct}%=${tp_price:.4f}, SL -{sl_pct}%=${sl_price:.4f}",
+            market="futures",
+            tp_pct=tp_pct,
+            sl_pct=sl_pct,
+        )
+        return {
+            "ok": True,
+            "order": order_result,
+            "journal": record,
+            "leverage": leverage,
+            "entry_price": entry_price,
+            "tp_price": tp_price,
+            "sl_price": sl_price,
+            "tp_pct": tp_pct,
+            "sl_pct": sl_pct,
         }
 
     def _s_cancel_all_orders(self) -> dict:

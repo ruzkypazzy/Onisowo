@@ -1855,18 +1855,23 @@ class Agent:
             except Exception:
                 pass
             try:
-                exec_result = self.skills.invoke("place_futures_order_with_tracking", {
+                exec_result = self.skills.invoke("place_futures_with_tpsl", {
                     "symbol": best_symbol,
                     "side": "buy",
                     "size": base_qty,  # base currency, not USDT
                     "leverage": leverage,
+                    "tp_pct": 5.0,  # take profit +5%
+                    "sl_pct": 2.5,  # stop loss -2.5%
                 })
                 exec_result = exec_result.get("result", exec_result) if isinstance(exec_result, dict) else exec_result
+                tp_price = exec_result.get("tp_price", 0) if isinstance(exec_result, dict) else 0
+                sl_price = exec_result.get("sl_price", 0) if isinstance(exec_result, dict) else 0
                 return (
-                    f"🤖 *Àkànjí futures trade:*\n\n"
+                    f"🤖 *Àkànjí futures trade with TP/SL:*\n\n"
                     f"💱 *{best_symbol}* LONG {leverage}x\n"
                     f"💰 *Margin:* ${margin:.2f}  |  *Notional:* ${notional:.2f}\n"
-                    f"📊 *Size:* {base_qty:.4f} {best_symbol.replace('USDT', '')}  (entry ~${last_price:.4f})\n\n"
+                    f"📊 *Size:* {base_qty:.4f} {best_symbol.replace('USDT', '')}  (entry ~${last_price:.4f})\n"
+                    f"🎯 *TP:* +5% = ${tp_price:.4f}    🛑 *SL:* -2.5% = ${sl_price:.4f}\n\n"
                     f"*🛠 Why:* Auto-picked highest-scoring candidate from {len(scored)} analyzed. "
                     f"Futures = automatic P&L tracking, no manual close needed.\n\n"
                     f"*📊 Execution:*\n```\n{json.dumps(exec_result, indent=2, default=str)[:600]}\n```"

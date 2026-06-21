@@ -96,7 +96,7 @@ def parse_command_args(text: str) -> tuple[str, dict]:
                "review", "reflect", "memory", "risk", "release", "settings", "pnl",
                "llm", "llms", "time", "abort", "strategy", "positions",
                "analyze", "autotrade", "proceed", "intro", "control",
-               "pick", "daily", "history", "export", "showlog"):
+               "pick", "pickspot", "pickfuture", "daily", "history", "export", "showlog"):
         return (cmd, {})
 
     if cmd == "strategist":
@@ -146,7 +146,9 @@ def run_bot(token: Optional[str] = None):
             BotCommand("proceed", "execute the pending analysis"),
             BotCommand("abort", "cancel a pending advisory or analysis"),
             BotCommand("autotrade", "autonomous mode: scan + pick + execute"),
-            BotCommand("pick", "pick the best trade right now and execute"),
+            BotCommand("pick", "scan market, pick best trade (auto spot/futures by analysis)"),
+            BotCommand("pickspot", "force spot trade (not futures)"),
+            BotCommand("pickfuture", "futures trade with leverage"),
             BotCommand("daily", "alias for /pick — pick today's trade"),
             BotCommand("history", "detailed trade history with stats"),
             BotCommand("export", "export trade history to a text file"),

@@ -40,7 +40,7 @@ DEFAULT_MAX_POSITION_PCT = 0.75     # 75% in one asset
 DEFAULT_MAX_DRAWDOWN_PCT = 0.30     # kill switch at 30%
 DEFAULT_MAX_DAILY_LOSS_PCT = 0.30   # daily loss cap
 DEFAULT_MAX_OPEN_TRADES = 5
-DEFAULT_MAX_LEVERAGE = 2
+DEFAULT_MAX_LEVERAGE = 10
 DEFAULT_BLACKLIST = ("USDC",)       # depeg-risk example
 
 

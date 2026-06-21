@@ -920,6 +920,9 @@ class Agent:
                 )
         if n_trades > 1:
             return self._agentic_pick_multiple(ctx, amount_usd=amount_usd, n=n_trades, market=market)
+        # Auto-decide market when not specified: use analysis + account state
+        if not any(tok in ("spot", "future", "futures") for tok in tokens):
+            market = self._decide_market_for_pick(amount_usd)
         # Futures is a separate flow (different position sizing, different exchange path)
         if market == "future":
             return self._agentic_pick_futures(ctx, amount_usd=amount_usd)
@@ -936,6 +939,61 @@ class Agent:
     def _cmd_daily(self, ctx: AgentContext) -> str:
         """Alias for /pick. 'Daily' implies the user's preferred routine."""
         return self._cmd_pick(ctx)
+
+    def _cmd_pickspot(self, ctx: AgentContext) -> str:
+        """Force spot trade. Same as /pick spot."""
+        return self._cmd_pick_with_market(ctx, market="spot")
+
+    def _decide_market_for_pick(self, amount_usd: float) -> str:
+        """Decide whether to use spot or futures for an unpicked /pick.
+
+        Heuristic:
+        - Check if user has funds in futures sub-account
+        - Check BTC regime: trending (ADX>25) → futures
+        - If unsure, default to spot (safer for tiny accounts)
+        """
+        try:
+            # Quick regime check on BTC
+            adx_resp = self.skills.invoke("adx", {"symbol": "BTCUSDT", "period": 14})
+            adx = 0
+            if isinstance(adx_resp, dict):
+                adx = adx_resp.get("adx", 0) or 0
+            # If BTC is trending strongly, use futures for better R:R
+            if adx >= 25:
+                return "future"
+            return "spot"
+        except Exception:
+            return "spot"
+
+    def _cmd_pickfuture(self, ctx: AgentContext) -> str:
+        """Force futures trade. Same as /pick future."""
+        return self._cmd_pick_with_market(ctx, market="future")
+
+    def _cmd_pick_with_market(self, ctx: AgentContext, market: str) -> str:
+        """Pick a trade with explicit market type."""
+        msg = (ctx.user_message or "").strip()
+        rest = re.sub(r"^/pick(?:spot|future)\s*", "", msg, flags=re.IGNORECASE).strip()
+        amount_usd = None
+        if rest:
+            try:
+                amount_usd = float(rest.lstrip("$"))
+            except ValueError:
+                try:
+                    amount_usd = float(rest)
+                except ValueError:
+                    amount_usd = None
+        if amount_usd is None or amount_usd <= 0:
+            try:
+                bal = self.bitget.get_account_balance("USDT") or 0.0
+            except Exception:
+                bal = 0.0
+            if bal > 0:
+                amount_usd = round(bal * 0.05, 2)
+            else:
+                amount_usd = 1.01
+        if market == "future":
+            return self._agentic_pick_futures(ctx, amount_usd=amount_usd)
+        return self._agentic_pick_and_trade(ctx, amount_usd=amount_usd, market="spot")
 
     def _cmd_autotrade(self, ctx: AgentContext) -> str:
         """Autonomous trade: bot scans market, picks best, executes.

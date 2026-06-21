@@ -324,20 +324,35 @@ class BitgetClient:
             body["force"] = "gtc"
         # Remove None values so we never send null fields.
         body = {k: v for k, v in body.items() if v is not None}
-        return self._request("POST", "/api/v2/spot/trade/place-order", body=body)
+        # Try V3 (UTA) first, fall back to V2 for classic accounts
+        try:
+            return self._request("POST", "/api/v3/trade/place-order", body=body)
+        except BitgetAPIError as e:
+            err = str(e)
+            if "404" in err or "not found" in err.lower() or "NOT FOUND" in err:
+                return self._request("POST", "/api/v2/spot/trade/place-order", body=body)
+            raise
 
     def cancel_order(self, symbol: str, order_id: str) -> dict:
-        """Cancel a pending order."""
-        return self._request(
-            "POST",
-            "/api/v2/spot/trade/cancel-order",
-            body={"symbol": symbol, "orderId": order_id},
-        )
+        """Cancel a pending order. Tries V3 then V2."""
+        body = {"symbol": symbol, "orderId": order_id}
+        try:
+            return self._request("POST", "/api/v3/trade/cancel-order", body=body)
+        except BitgetAPIError as e:
+            if "404" in str(e) or "NOT FOUND" in str(e):
+                return self._request("POST", "/api/v2/spot/trade/cancel-order", body=body)
+            raise
 
     def get_pending_orders(self, symbol: Optional[str] = None) -> list:
         """Get all pending (open) orders, optionally filtered by symbol."""
         params = {"symbol": symbol} if symbol else None
-        return self._request("GET", "/api/v2/spot/trade/orders-pending", params=params)
+        # Try V3 first for UTA, fall back to V2
+        try:
+            return self._request("GET", "/api/v3/trade/orders-pending", params=params)
+        except BitgetAPIError as e:
+            if "404" in str(e) or "NOT FOUND" in str(e):
+                return self._request("GET", "/api/v2/spot/trade/orders-pending", params=params)
+            raise
 
     def get_order_history(self, symbol: str, limit: int = 50) -> list:
         """Get recent order history for a symbol."""
@@ -352,20 +367,24 @@ class BitgetClient:
     # -------------------------------------------------------------------------
 
     def get_futures_account(self, product_type: str = "USDT-FUTURES", margin_coin: str = "USDT") -> dict:
-        """Get futures account info."""
-        return self._request(
-            "GET",
-            "/api/v2/mix/account/account",
-            params={"productType": product_type, "marginCoin": margin_coin},
-        )
+        """Get futures account info. Tries V3 (UTA) then V2."""
+        params = {"productType": product_type, "marginCoin": margin_coin}
+        try:
+            return self._request("GET", "/api/v3/account/account", params=params)
+        except BitgetAPIError as e:
+            if "404" in str(e) or "NOT FOUND" in str(e):
+                return self._request("GET", "/api/v2/mix/account/account", params=params)
+            raise
 
     def get_positions(self, product_type: str = "USDT-FUTURES") -> list:
-        """Get all open futures positions."""
-        return self._request(
-            "GET",
-            "/api/v2/mix/position/all-position",
-            params={"productType": product_type, "marginCoin": "USDT"},
-        )
+        """Get all open futures positions. Tries V3 then V2."""
+        params = {"productType": product_type, "marginCoin": "USDT"}
+        try:
+            return self._request("GET", "/api/v3/position/all-position", params=params)
+        except BitgetAPIError as e:
+            if "404" in str(e) or "NOT FOUND" in str(e):
+                return self._request("GET", "/api/v2/mix/position/all-position", params=params)
+            raise
 
     def place_futures_order(
         self,
@@ -375,11 +394,16 @@ class BitgetClient:
         order_type: str = "market",  # "market" or "limit"
         price: Optional[str] = None,
         leverage: Optional[str] = "1",
-        margin_mode: str = "isolated",
+        margin_mode: str = "crossed",
         product_type: str = "USDT-FUTURES",
         client_oid: Optional[str] = None,
     ) -> dict:
-        """Place a futures order. NOTE: leverage should be 1-3x only (we're cautious)."""
+        """Place a futures order.
+
+        Tries V3 (UTA) first, falls back to V2 for classic accounts.
+        For UTA: POST /api/v3/trade/place-order
+        For classic: POST /api/v2/mix/order/place-order
+        """
         body = {
             "symbol": symbol,
             "productType": product_type,
@@ -391,18 +415,28 @@ class BitgetClient:
             "price": price,
             "leverage": leverage,
             "clientOid": client_oid or f"onisowo-fut-{int(time.time() * 1000)}",
-            "reduceOnly": False,
         }
         body = {k: v for k, v in body.items() if v is not None}
-        return self._request("POST", "/api/v2/mix/order/place-order", body=body)
+        # Try V3 (UTA) first
+        try:
+            return self._request("POST", "/api/v3/trade/place-order", body=body)
+        except BitgetAPIError as e:
+            err = str(e)
+            # If V3 says we're in classic mode, fall back to V2
+            if "404" in err or "not found" in err.lower() or "NOT FOUND" in err:
+                return self._request("POST", "/api/v2/mix/order/place-order", body=body)
+            raise
 
     def set_leverage(self, symbol: str, leverage: str, product_type: str = "USDT-FUTURES") -> dict:
-        """Set leverage for a futures symbol. CAUTION: leverage amplifies risk."""
-        return self._request(
-            "POST",
-            "/api/v2/mix/account/set-leverage",
-            body={"symbol": symbol, "marginCoin": "USDT", "leverage": leverage, "productType": product_type},
-        )
+        """Set leverage for a futures symbol. CAUTION: leverage amplifies risk.
+        Tries V3 (UTA) then V2 (classic)."""
+        body = {"symbol": symbol, "marginCoin": "USDT", "leverage": leverage, "productType": product_type}
+        try:
+            return self._request("POST", "/api/v3/account/set-leverage", body=body)
+        except BitgetAPIError as e:
+            if "404" in str(e) or "NOT FOUND" in str(e):
+                return self._request("POST", "/api/v2/mix/account/set-leverage", body=body)
+            raise
 
     # -------------------------------------------------------------------------
     # Convenience methods (used by agent / skills)

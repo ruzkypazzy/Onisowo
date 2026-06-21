@@ -220,12 +220,26 @@ class BitgetClient:
             resp = self._request("GET", url, params=params)
             if isinstance(resp, dict):
                 data = resp.get("data", resp)
+                # V3 unified account can return data as either:
+                #  - A list of coin balances: [{coin: USDT, available: 10.95, ...}]
+                #  - A dict with an 'assets' list nested inside
                 if isinstance(data, list):
                     for item in data:
                         if isinstance(item, dict) and item.get("coin", "").upper() == coin.upper():
                             return float(item.get("available", "0") or 0)
                 if isinstance(data, dict):
-                    return float(data.get("available", "0") or 0)
+                    # Try assets[] first
+                    assets = data.get("assets", [])
+                    if isinstance(assets, list):
+                        for item in assets:
+                            if isinstance(item, dict) and item.get("coin", "").upper() == coin.upper():
+                                return float(item.get("available", "0") or 0)
+                    # Then top-level available
+                    if "available" in data:
+                        return float(data.get("available", "0") or 0)
+                    # Then usdtEquity
+                    if "usdtEquity" in data and coin.upper() == "USDT":
+                        return float(data.get("usdtEquity", "0") or 0)
         except Exception:
             pass
         # 4. V3 spot account

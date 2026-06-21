@@ -1440,7 +1440,13 @@ class SkillsRegistry:
         # Get current price for TP/SL calculation
         try:
             ticker = self.bitget.get_ticker(symbol)
-            entry_price = float(ticker.get("last", 0)) if isinstance(ticker, dict) else 0
+            # Try multiple field names: V2 uses 'lastPr', V3 uses 'lastPrice'
+            entry_price = float(
+                ticker.get("lastPrice", 0) or
+                ticker.get("lastPr", 0) or
+                ticker.get("last", 0) or
+                0
+            ) if isinstance(ticker, dict) else 0
         except Exception:
             entry_price = 0
         if entry_price <= 0:

@@ -68,8 +68,14 @@ class BitgetClient:
         request_path: str,
         params: Optional[dict] = None,
         body: Optional[dict] = None,
+        signed: bool = True,
     ) -> dict[str, Any]:
-        """Make a signed request to Bitget."""
+        """Make a request to Bitget. Public endpoints (market data) work without signing.
+
+        signed=True (default): adds Bitget auth headers. Required for /account,
+        /trade, /position endpoints.
+        signed=False: no auth. Use for /market/* public endpoints.
+        """
         timestamp = str(int(time.time() * 1000))
         body_str = "" if body is None else json.dumps(body)
 
@@ -80,16 +86,19 @@ class BitgetClient:
         else:
             full_path = request_path
 
-        sign = self._sign(timestamp, method, full_path, body_str)
-
-        headers = {
-            "ACCESS-KEY": self.api_key,
-            "ACCESS-SIGN": sign,
-            "ACCESS-TIMESTAMP": timestamp,
-            "ACCESS-PASSPHRASE": self.passphrase,
-            "Content-Type": "application/json",
-            "locale": "en-US",
-        }
+        if signed:
+            sign = self._sign(timestamp, method, full_path, body_str)
+            headers = {
+                "ACCESS-KEY": self.api_key,
+                "ACCESS-SIGN": sign,
+                "ACCESS-TIMESTAMP": timestamp,
+                "ACCESS-PASSPHRASE": self.passphrase,
+                "Content-Type": "application/json",
+                "locale": "en-US",
+            }
+        else:
+            # Public endpoint - no auth headers needed
+            headers = {"Content-Type": "application/json", "locale": "en-US"}
 
         url = f"{self.BASE_URL}{full_path}"
 
@@ -144,7 +153,7 @@ class BitgetClient:
     def get_ticker(self, symbol: str) -> dict:
         """Get current price for a symbol (e.g., 'BTCUSDT').
 
-        Tries multiple endpoints in order:
+        Tries multiple endpoints in order, all unsigned (public market data):
           1. V3 futures ticker (for USDT pairs on UTA)
           2. V3 spot ticker
           3. V2 spot ticker (last resort)
@@ -166,9 +175,19 @@ class BitgetClient:
         last_err = None
         for method, path, params in endpoints:
             try:
-                resp = self._request(method, path, params=params)
+                # Public market endpoints don't need auth
+                resp = self._request(method, path, params=params, signed=False)
+                # _request already returns the inner 'data' field.
+                # If it's a list, take the first item (the ticker).
+                if isinstance(resp, list) and resp:
+                    return resp[0]
+                # If it's a dict with 'data' inside (some endpoints)
                 if isinstance(resp, dict) and resp.get("data"):
-                    return resp["data"][0] if isinstance(resp["data"], list) else resp["data"]
+                    inner = resp["data"]
+                    return inner[0] if isinstance(inner, list) else inner
+                # If it's a non-empty dict (some V3 endpoints return the ticker directly)
+                if isinstance(resp, dict) and (resp.get("lastPrice") or resp.get("lastPr") or resp.get("last")):
+                    return resp
             except Exception as e:
                 last_err = e
                 continue

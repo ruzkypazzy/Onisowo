@@ -142,7 +142,17 @@ class BitgetClient:
     # -------------------------------------------------------------------------
 
     def get_ticker(self, symbol: str) -> dict:
-        """Get current price for a symbol (e.g., 'BTCUSDT')."""
+        """Get current price for a symbol (e.g., 'BTCUSDT'). Tries V3 futures first if symbol ends in USDT (likely a futures pair), else V2 spot."""
+        # Try V3 futures first for USDT pairs (works for both spot and futures
+        # tickers, and UTA accounts need V3)
+        if symbol.endswith("USDT"):
+            try:
+                resp = self._request("GET", "/api/v3/market/tickers", params={"symbol": symbol, "category": "USDT-FUTURES"})
+                if isinstance(resp, dict) and resp.get("data"):
+                    return resp["data"][0] if isinstance(resp["data"], list) else resp["data"]
+            except Exception:
+                pass
+        # Fall back to V2 spot
         return self._request("GET", "/api/v2/spot/market/tickers", params={"symbol": symbol})
 
     def get_all_tickers(self) -> list:

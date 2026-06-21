@@ -1403,15 +1403,17 @@ class SkillsRegistry:
             inner = order_result.get("data", order_result)
             if isinstance(inner, dict):
                 order_id = inner.get("orderId") or inner.get("clientOid") or ""
-        # Record in journal
+        # Record in journal — size_usd is the NOTIONAL (size × price), not the margin
+        # For futures, this is the full exposure including leverage
+        notional_usd = size * entry_price if entry_price > 0 else 0
         record = self._s_record_trade(
             symbol=symbol,
             side=side,
-            size_usd=size * entry_price if entry_price > 0 else 0,
+            size_usd=notional_usd,
             price=entry_price,
             order_id=order_id,
             reason=f"futures {leverage}x",
-            thesis=f"futures trade, leverage {leverage}x",
+            thesis=f"futures trade, leverage {leverage}x, notional ${notional_usd:.2f}",
             market="futures",
             tp_pct=5.0,
             sl_pct=2.5,

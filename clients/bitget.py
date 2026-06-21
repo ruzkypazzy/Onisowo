@@ -142,18 +142,40 @@ class BitgetClient:
     # -------------------------------------------------------------------------
 
     def get_ticker(self, symbol: str) -> dict:
-        """Get current price for a symbol (e.g., 'BTCUSDT'). Tries V3 futures first if symbol ends in USDT (likely a futures pair), else V2 spot."""
-        # Try V3 futures first for USDT pairs (works for both spot and futures
-        # tickers, and UTA accounts need V3)
+        """Get current price for a symbol (e.g., 'BTCUSDT').
+
+        Tries multiple endpoints in order:
+          1. V3 futures ticker (for USDT pairs on UTA)
+          2. V3 spot ticker
+          3. V2 spot ticker (last resort)
+
+        Returns the first one that works.
+        """
+        endpoints = []
         if symbol.endswith("USDT"):
+            endpoints = [
+                ("GET", "/api/v3/market/tickers", {"symbol": symbol, "category": "USDT-FUTURES"}),
+                ("GET", "/api/v3/market/tickers", {"symbol": symbol, "category": "spot"}),
+                ("GET", "/api/v2/spot/market/tickers", {"symbol": symbol}),
+            ]
+        else:
+            endpoints = [
+                ("GET", "/api/v3/market/tickers", {"symbol": symbol, "category": "spot"}),
+                ("GET", "/api/v2/spot/market/tickers", {"symbol": symbol}),
+            ]
+        last_err = None
+        for method, path, params in endpoints:
             try:
-                resp = self._request("GET", "/api/v3/market/tickers", params={"symbol": symbol, "category": "USDT-FUTURES"})
+                resp = self._request(method, path, params=params)
                 if isinstance(resp, dict) and resp.get("data"):
                     return resp["data"][0] if isinstance(resp["data"], list) else resp["data"]
-            except Exception:
-                pass
-        # Fall back to V2 spot
-        return self._request("GET", "/api/v2/spot/market/tickers", params={"symbol": symbol})
+            except Exception as e:
+                last_err = e
+                continue
+        # If we got here, all endpoints failed. Raise the last error.
+        if last_err:
+            raise last_err
+        return {}
 
     def get_all_tickers(self) -> list:
         """Get all spot tickers (large response, cache for 30s)."""

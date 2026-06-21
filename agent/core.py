@@ -1824,14 +1824,16 @@ class Agent:
             last_price = next((p for s, c, p in scored if s == best_symbol), 0)
             if last_price <= 0:
                 return f"❌ No price for {best_symbol}"
-            # Bitget futures uses contracts; for USDT-margined perps, size = USDT notional
-            # We pass size as the notional USDT amount (Bitget interprets this correctly)
+            # CRITICAL: V3 futures 'qty' / V2 'size' is in BASE CURRENCY (e.g. SOL),
+            # NOT USDT notional. So we convert:
+            #   base_qty = notional_usdt / price_per_base
             notional = margin * leverage
+            base_qty = notional / last_price
             try:
                 exec_result = self.skills.invoke("place_futures_order_with_tracking", {
                     "symbol": best_symbol,
                     "side": "buy",
-                    "size": notional,
+                    "size": base_qty,  # base currency, not USDT
                     "leverage": leverage,
                 })
                 exec_result = exec_result.get("result", exec_result) if isinstance(exec_result, dict) else exec_result
@@ -1839,7 +1841,7 @@ class Agent:
                     f"🤖 *Àkànjí futures trade:*\n\n"
                     f"💱 *{best_symbol}* LONG {leverage}x\n"
                     f"💰 *Margin:* ${margin:.2f}  |  *Notional:* ${notional:.2f}\n"
-                    f"📊 *Entry:* ~${last_price:.4f}\n\n"
+                    f"📊 *Size:* {base_qty:.4f} {best_symbol.replace('USDT', '')}  (entry ~${last_price:.4f})\n\n"
                     f"*🛠 Why:* Auto-picked highest-scoring candidate from {len(scored)} analyzed. "
                     f"Futures = automatic P&L tracking, no manual close needed.\n\n"
                     f"*📊 Execution:*\n```\n{json.dumps(exec_result, indent=2, default=str)[:600]}\n```"

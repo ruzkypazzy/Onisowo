@@ -177,10 +177,17 @@ class BitgetClient:
     def get_account_balance(self, coin: str = "USDT") -> float:
         """Get available balance for a specific coin across spot and futures.
 
-        Tries spot first; if 0 or empty, falls back to futures account
-        (since users may hold funds in USDT-margined futures even with no spot USDT).
+        Tries V2 spot first; if 0 or empty, falls back to:
+        - V2 futures (USDT-margined perps)
+        - V3 unified account (UTA) — `/api/v3/account/assets`
+        - V3 spot account — `/api/v3/spot/account/assets`
+
+        This handles all account types: classic spot, classic futures,
+        and the new Unified Trading Account (UTA).
+
         Returns the available balance for the requested coin.
         """
+        # 1. V2 spot account
         try:
             assets = self.get_account_assets(coin=coin)
             if assets and len(assets) > 0:
@@ -189,17 +196,49 @@ class BitgetClient:
                     return spot_available
         except Exception:
             pass
-        # Spot is empty — try futures account
+        # 2. V2 futures account (USDT-margined)
         try:
             url = "/api/v2/mix/account/accounts"
             params = {"productType": "USDT-FUTURES", "marginCoin": coin}
-            resp = self._request("GET", url, params=params, signed=True)
+            resp = self._request("GET", url, params=params)
             if isinstance(resp, dict):
                 data = resp.get("data", resp)
                 if isinstance(data, list) and data:
-                    return float(data[0].get("available", "0") or 0)
+                    bal = float(data[0].get("available", "0") or 0)
+                    if bal > 0:
+                        return bal
+                if isinstance(data, dict):
+                    bal = float(data.get("available", "0") or 0)
+                    if bal > 0:
+                        return bal
+        except Exception:
+            pass
+        # 3. V3 unified account (UTA) — the new Bitget default for upgraded accounts
+        try:
+            url = "/api/v3/account/assets"
+            params = {"coin": coin}
+            resp = self._request("GET", url, params=params)
+            if isinstance(resp, dict):
+                data = resp.get("data", resp)
+                if isinstance(data, list):
+                    for item in data:
+                        if isinstance(item, dict) and item.get("coin", "").upper() == coin.upper():
+                            return float(item.get("available", "0") or 0)
                 if isinstance(data, dict):
                     return float(data.get("available", "0") or 0)
+        except Exception:
+            pass
+        # 4. V3 spot account
+        try:
+            url = "/api/v3/spot/account/assets"
+            params = {"coin": coin}
+            resp = self._request("GET", url, params=params)
+            if isinstance(resp, dict):
+                data = resp.get("data", resp)
+                if isinstance(data, list):
+                    for item in data:
+                        if isinstance(item, dict) and item.get("coin", "").upper() == coin.upper():
+                            return float(item.get("available", "0") or 0)
         except Exception:
             pass
         return 0.0

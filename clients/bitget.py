@@ -404,20 +404,22 @@ class BitgetClient:
         V3 needs `category` field (e.g. 'linear' for USDT-margined perps).
         V2 uses `productType` (e.g. 'USDT-FUTURES').
         """
-        # V3 body: needs category='USDT-FUTURES' and uses 'qty' field.
-        # Also needs positionType='one_way' for accounts that aren't
-        # in hedge mode (default for new accounts).
+        # V3 UTA body: uses posSide (not positionType).
+        # posSide: 'long' or 'short' for one-way mode.
+        # side: 'buy' or 'sell' (the action).
+        # Bitget UTA V3 spec: /api/v3/trade/place-order
+        #   {category, symbol, orderType, qty, price, side, posSide, ...}
         v3_body = {
             "category": "USDT-FUTURES",
             "symbol": symbol,
             "marginMode": margin_mode,
             "marginCoin": "USDT",
             "qty": size,
-            "side": side,
+            "side": side,                  # 'buy' to open, 'sell' to close
+            "posSide": "long" if side == "buy" else "short",  # V3 needs this
             "orderType": order_type,
             "price": price,
             "leverage": leverage,
-            "positionType": "one_way",  # one-way mode (not hedge)
             "clientOid": client_oid or f"onisowo-fut-{int(time.time() * 1000)}",
         }
         v3_body = {k: v for k, v in v3_body.items() if v is not None}

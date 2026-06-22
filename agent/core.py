@@ -1703,6 +1703,114 @@ class Agent:
             "_Not on the list? Try it anyway. If it speaks OpenAI protocol, it'll work._"
         )
 
+    def _cmd_review(self, ctx: AgentContext) -> str:
+        """7-day review: P&L summary, win rate, top winners/losers.
+
+        Alias of /reflect but with a structured summary format (no LLM
+        call needed for the headline numbers, just DB queries).
+        """
+        try:
+            trades = self.db.get_trades_for_review(days=7)
+            if not trades:
+                return (
+                    "📅 *7-day review*\n\n"
+                    "No closed trades in the last 7 days.\n"
+                    "Run `/pick` to start trading, then come back tomorrow."
+                )
+            wins = [t for t in trades if t.get("pnl_usd", 0) > 0]
+            losses = [t for t in trades if t.get("pnl_usd", 0) < 0]
+            breakeven = [t for t in trades if t.get("pnl_usd", 0) == 0]
+            total_pnl = sum(t.get("pnl_usd", 0) for t in trades)
+            total_volume = sum(t.get("quote_usd", 0) for t in trades)
+            win_rate = (len(wins) / len(trades) * 100) if trades else 0
+            avg_win = (sum(t["pnl_usd"] for t in wins) / len(wins)) if wins else 0
+            avg_loss = (sum(t["pnl_usd"] for t in losses) / len(losses)) if losses else 0
+            # Top winners
+            top_wins = sorted(wins, key=lambda t: t.get("pnl_usd", 0), reverse=True)[:3]
+            top_losses = sorted(losses, key=lambda t: t.get("pnl_usd", 0))[:3]
+            lines = ["📅 *7-day review*\n"]
+            lines.append(f"📊 *Trades:* {len(trades)} ({len(wins)}W / {len(losses)}L / {len(breakeven)}BE)")
+            lines.append(f"💰 *Total P&L:* ${total_pnl:+.2f}")
+            lines.append(f"📈 *Win rate:* {win_rate:.0f}%")
+            lines.append(f"💵 *Volume traded:* ${total_volume:.2f}")
+            if wins:
+                lines.append(f"✅ *Avg win:* +${avg_win:.2f}")
+            if losses:
+                lines.append(f"❌ *Avg loss:* ${avg_loss:.2f}")
+            if top_wins:
+                lines.append("\n🏆 *Top winners:*")
+                for t in top_wins:
+                    lines.append(f"  • {t.get('symbol', '?')} {t.get('side', '?')} +${t.get('pnl_usd', 0):.2f}")
+            if top_losses:
+                lines.append("\n⚠️ *Top losses:*")
+                for t in top_losses:
+                    lines.append(f"  • {t.get('symbol', '?')} {t.get('side', '?')} ${t.get('pnl_usd', 0):.2f}")
+            lines.append(f"\n🤖 For deeper analysis, use `/reflect`")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.exception(f"_cmd_review failed: {e}")
+            return f"❌ Review failed: {e}"
+
+    def _cmd_schedule(self, ctx: AgentContext) -> str:
+        """Schedule an automated daily task.
+
+        Usage:
+          /schedule daily 9am       — run /pick every day at 9:00 UTC
+          /schedule daily 9:30am    — run at 9:30 UTC
+          /schedule daily 21:00     — run at 21:00 UTC
+          /schedule stop             — cancel the schedule
+          /schedule status           — show current schedule
+
+        Default is daily 9am UTC if no time is given.
+        """
+        # Lazy import to avoid circular dependency
+        try:
+            from agent.scheduler import DailyScheduler
+        except ImportError:
+            return "❌ Scheduler module not available."
+
+        # Lazy-init the scheduler on the agent instance
+        if not hasattr(self, "_scheduler") or self._scheduler is None:
+            self._scheduler = DailyScheduler(agent=self, chat_id=ctx.user_id)
+
+        raw = (ctx.user_message or "").strip()
+        # Drop the leading "/schedule"
+        body = re.sub(r"^/schedule\b", "", raw, flags=re.IGNORECASE).strip()
+
+        # No arg → show status
+        if not body:
+            return self._scheduler.status()
+
+        parts = body.split(None, 1)
+        action = parts[0].lower()
+        rest = parts[1] if len(parts) > 1 else ""
+
+        if action in ("stop", "off", "cancel"):
+            self._scheduler.stop()
+            return "⏸ Scheduler stopped. Use `/schedule daily 9am` to restart."
+
+        if action in ("status", "show"):
+            return self._scheduler.status()
+
+        if action in ("daily", "everyday", "day"):
+            # Default time: 9am UTC if none given
+            time_str = rest or "9am"
+            try:
+                msg = self._scheduler.set_time(time_str)
+            except ValueError as e:
+                return f"❌ {e}\n\nExamples: `9am`, `9:30am`, `21:00`, `14:30`"
+            self._scheduler.start()
+            return f"⏰ {msg}\n\nI'll send a `/pick` to you at that time, every day.\nUse `/schedule stop` to cancel."
+
+        return (
+            "❓ Usage:\n"
+            "  `/schedule daily 9am` — run /pick every day at 9 AM UTC\n"
+            "  `/schedule daily 9:30am` — at 9:30 AM UTC\n"
+            "  `/schedule daily 21:00` — at 21:00 UTC\n"
+            "  `/schedule stop` — cancel\n"
+            "  `/schedule status` — show current schedule"
+        )
+
     def _cmd_reflect(self, ctx: AgentContext) -> str:
         """Recursive self-improvement: review last 7 days of trades."""
         try:

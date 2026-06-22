@@ -321,6 +321,9 @@ class RiskEngine:
         # say $1, but the real minimum in practice is $1.01. Anything below
         # gets rejected with code 45110 'less than the minimum amount 1 USDT').
         BITGET_MIN_USDT = 1.01
+        # BUT: futures have an additional minOrderAmount of $5 USDT notional.
+        # So the effective minimum for futures trades is $5 (we use $7 to
+        # be safe with fees and rounding).
         if final < BITGET_MIN_USDT:
             if balance_usd >= BITGET_MIN_USDT:
                 # Bump up to Bitget's real minimum

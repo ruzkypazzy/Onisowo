@@ -271,7 +271,14 @@ sudo journalctl -u akanji -f    # live logs
 - `/daily` — alias for `/pick`
 - `/autotrade` — fully autonomous: scan + pick + execute
 - `/schedule daily 9am` — run `/pick` every day at 9 AM UTC
+- `/schedule daily 9am spot` — daily spot only
+- `/schedule daily 9am futures` — daily futures only (with TP/SL)
+- `/schedule daily 9am auto` — daily, bot decides market
+- `/schedule market spot` — lock market to spot (no time change)
+- `/schedule market futures` — lock market to futures
+- `/schedule market auto` — let the bot decide
 - `/schedule stop` — cancel the schedule
+- `/schedule status` — show current schedule
 
 ### Manual trading (with advisor)
 - `/buy $5 SYMBOL` — buy $5 of SYMBOL with advisor

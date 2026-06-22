@@ -43,11 +43,14 @@ def _parse_time(time_str: str) -> tuple[int, int]:
 class DailyScheduler:
     """Background thread that runs /pick once per day at a user-specified UTC time."""
 
+    VALID_MARKETS = ("auto", "spot", "futures", "future")
+
     def __init__(self, agent, chat_id: int):
         self.agent = agent
         self.chat_id = chat_id
         self.hour = 9
         self.minute = 0
+        self.market = "auto"  # "auto" | "spot" | "futures"
         self.enabled = False
         self.last_run_date = None
         self.last_run_result = None
@@ -60,6 +63,24 @@ class DailyScheduler:
         h, m = _parse_time(time_str)
         self.hour, self.minute = h, m
         return f"Daily pick scheduled for {h:02d}:{m:02d} UTC every day"
+
+    def set_market(self, market: str) -> str:
+        """Set the daily market. Returns human-readable confirmation."""
+        m = market.strip().lower()
+        if m not in self.VALID_MARKETS:
+            return (
+                f"❌ Unknown market: {market}\n"
+                f"Valid: {', '.join(self.VALID_MARKETS)}"
+            )
+        self.market = m
+        if m == "future":
+            self.market = "futures"
+        label = {
+            "auto": "auto (bot decides based on BTC ADX regime)",
+            "spot": "spot only",
+            "futures": "futures only (with TP/SL)",
+        }[self.market]
+        return f"Market: {label}"
 
     def start(self) -> None:
         if self.enabled:
@@ -76,15 +97,24 @@ class DailyScheduler:
         logger.info("Scheduler stopped")
 
     def status(self) -> str:
+        market_label = {
+            "auto": "auto (bot decides by BTC ADX regime)",
+            "spot": "spot only",
+            "futures": "futures only (with TP/SL)",
+        }.get(self.market, self.market)
         if not self.enabled:
             return (
-                "⏸ Scheduler is stopped.\n\n"
+                f"⏸ Scheduler is stopped.\n"
+                f"📅 Market: {market_label}\n\n"
                 "Use `/schedule daily 9am` to start.\n"
-                "Use `/schedule daily HH:MM` for any UTC time."
+                "Use `/schedule daily HH:MM` for any UTC time.\n"
+                "Use `/schedule market spot` or `/schedule market futures` "
+                "to lock the market."
             )
         return (
             f"⏰ Scheduler active\n"
             f"📅 Runs every day at {self.hour:02d}:{self.minute:02d} UTC\n"
+            f"💱 Market: {market_label}\n"
             f"🕐 Current time (UTC): "
             f"{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"✅ Last run: {self.last_run_date or 'never'}"
@@ -106,16 +136,23 @@ class DailyScheduler:
 
     def _run_pick(self) -> None:
         """Run the daily pick and store the result for the user to retrieve."""
-        logger.info(f"Daily pick running for chat {self.chat_id}")
+        logger.info(f"Daily pick running for chat {self.chat_id} (market={self.market})")
         try:
             from agent.core import AgentContext
+            # Map market to the right command
+            if self.market == "spot":
+                cmd = "pickspot"
+            elif self.market == "futures":
+                cmd = "pickfuture"
+            else:
+                cmd = "pick"  # auto: let the bot decide by BTC ADX
             ctx = AgentContext(
                 user_id=self.chat_id,
-                user_message="/pick",
-                command="pick",
+                user_message=f"/{cmd}",
+                command=cmd,
                 args={},
             )
-            result = self.agent._cmd_pick(ctx)
+            result = self.agent.handle(ctx)
             self.last_run_result = result
             # Persist to DB so the user can fetch it via /history or /journal
             try:

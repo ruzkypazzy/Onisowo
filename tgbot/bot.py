@@ -152,6 +152,7 @@ def run_bot(token: Optional[str] = None):
             BotCommand("daily", "alias for /pick — pick today's trade"),
             BotCommand("history", "detailed trade history with stats"),
             BotCommand("export", "export trade history to a text file"),
+            BotCommand("schedule", "schedule daily auto-pick (e.g. /schedule daily 9am)"),
             BotCommand("strategist", "start/stop/status/tick the autonomous loop"),
             BotCommand("strategy", "show strategy rules"),
             BotCommand("positions", "open positions with adaptive TP/SL"),

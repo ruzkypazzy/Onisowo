@@ -1755,13 +1755,17 @@ class Agent:
         """Schedule an automated daily task.
 
         Usage:
-          /schedule daily 9am       — run /pick every day at 9:00 UTC
-          /schedule daily 9:30am    — run at 9:30 UTC
-          /schedule daily 21:00     — run at 21:00 UTC
-          /schedule stop             — cancel the schedule
-          /schedule status           — show current schedule
+          /schedule daily 9am                — run /pick every day at 9:00 UTC
+          /schedule daily 9am spot           — force spot only
+          /schedule daily 9am futures        — force futures only (with TP/SL)
+          /schedule daily 9am auto           — bot decides (default)
+          /schedule market spot              — lock market to spot (no time change)
+          /schedule market futures           — lock market to futures
+          /schedule market auto              — let the bot decide
+          /schedule stop                      — cancel the schedule
+          /schedule status                    — show current schedule
 
-        Default is daily 9am UTC if no time is given.
+        Default is daily 9am UTC, market=auto.
         """
         # Lazy import to avoid circular dependency
         try:
@@ -1792,21 +1796,49 @@ class Agent:
         if action in ("status", "show"):
             return self._scheduler.status()
 
+        if action in ("market", "pair"):
+            # /schedule market spot|future|futures|auto
+            market_str = rest.strip().lower() or "auto"
+            msg = self._scheduler.set_market(market_str)
+            if msg.startswith("❌"):
+                return msg
+            return f"✅ {msg}\n\nCurrent schedule: {self._scheduler.status()}"
+
         if action in ("daily", "everyday", "day"):
-            # Default time: 9am UTC if none given
-            time_str = rest or "9am"
+            # /schedule daily [HH:MM] [spot|futures|auto]
+            tokens = rest.split() if rest else []
+            time_str = "9am"
+            market_str = "auto"
+            for tok in tokens:
+                tl = tok.lower()
+                if tl in ("spot", "future", "futures", "auto"):
+                    market_str = tl
+                else:
+                    time_str = tok
             try:
-                msg = self._scheduler.set_time(time_str)
+                time_msg = self._scheduler.set_time(time_str)
             except ValueError as e:
                 return f"❌ {e}\n\nExamples: `9am`, `9:30am`, `21:00`, `14:30`"
+            market_msg = self._scheduler.set_market(market_str)
+            if market_msg.startswith("❌"):
+                return market_msg
             self._scheduler.start()
-            return f"⏰ {msg}\n\nI'll send a `/pick` to you at that time, every day.\nUse `/schedule stop` to cancel."
+            return (
+                f"⏰ {time_msg}\n"
+                f"💱 {market_msg}\n\n"
+                f"I'll send a `/pick` to you at that time, every day.\n"
+                f"Use `/schedule stop` to cancel."
+            )
 
         return (
             "❓ Usage:\n"
-            "  `/schedule daily 9am` — run /pick every day at 9 AM UTC\n"
-            "  `/schedule daily 9:30am` — at 9:30 AM UTC\n"
-            "  `/schedule daily 21:00` — at 21:00 UTC\n"
+            "  `/schedule daily 9am` — run /pick every day at 9 AM UTC (auto market)\n"
+            "  `/schedule daily 9am spot` — force spot\n"
+            "  `/schedule daily 9am futures` — force futures (with TP/SL)\n"
+            "  `/schedule daily 9am auto` — bot decides\n"
+            "  `/schedule market spot` — lock market to spot (no time change)\n"
+            "  `/schedule market futures` — lock market to futures\n"
+            "  `/schedule market auto` — bot decides (default)\n"
             "  `/schedule stop` — cancel\n"
             "  `/schedule status` — show current schedule"
         )

@@ -153,6 +153,13 @@ def main():
         action="store_true",
         help="Print to stdout instead of writing to TRADE_LOG.md",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite TRADE_LOG.md even if the DB is empty. Without this flag, "
+             "the script refuses to write an empty log (which would wipe the "
+             "hand-curated submission data).",
+    )
     args = parser.parse_args()
 
     trades = fetch_trades(args.db)
@@ -160,13 +167,21 @@ def main():
 
     if args.stdout:
         print(rendered)
-    else:
-        out_path = "TRADE_LOG.md"
-        with open(out_path, "w") as f:
-            f.write(rendered)
-        n_open = sum(1 for t in trades if t.get("status") == "open")
-        n_closed = sum(1 for t in trades if t.get("status") == "closed")
-        print(f"✓ Wrote {out_path} ({n_open} open + {n_closed} closed trades)")
+        return
+
+    if not trades and not args.force:
+        print("⚠️ DB is empty — refusing to overwrite TRADE_LOG.md.")
+        print("  The file is the source of truth for the hackathon submission.")
+        print("  If you really want to wipe it, run with --force.")
+        print("  To see the empty log without writing, run with --stdout.")
+        sys.exit(1)
+
+    out_path = "TRADE_LOG.md"
+    with open(out_path, "w") as f:
+        f.write(rendered)
+    n_open = sum(1 for t in trades if t.get("status") == "open")
+    n_closed = sum(1 for t in trades if t.get("status") == "closed")
+    print(f"✓ Wrote {out_path} ({n_open} open + {n_closed} closed trades)")
 
 
 if __name__ == "__main__":

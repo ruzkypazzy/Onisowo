@@ -2165,30 +2165,22 @@ class Agent:
             )
 
         content = "\n".join(lines)
-        # Write to file
+        # Write the export to /tmp/. Do NOT touch TRADE_LOG.md here —
+        # that file is the source of truth for the hackathon submission
+        # and the user refreshes it explicitly with:
+        #   python3 scripts/update_trade_log.py
         out_path = f"/tmp/akanji_trade_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
         try:
             with open(out_path, "w") as f:
                 f.write(content)
         except Exception:
             out_path = "(in-memory only)"
-        # If we're running self-hosted, also refresh TRADE_LOG.md
-        # so the file in the repo stays in sync with the live journal.
-        try:
-            import subprocess
-            result = subprocess.run(
-                ["python3", "scripts/update_trade_log.py"],
-                capture_output=True, text=True, timeout=15
-            )
-            if result.returncode == 0:
-                return (
-                    f"📤 Exported {len(trades)} trades to `{out_path}`\n"
-                    f"🔄 TRADE_LOG.md refreshed: {result.stdout.strip()}\n\n"
-                    f"```\n{content[:2000]}{'...[truncated]' if len(content) > 2000 else ''}\n```"
-                )
-        except Exception:
-            pass
-        return f"📤 Exported {len(trades)} trades to `{out_path}`\n\n```\n{content[:2000]}{'...[truncated]' if len(content) > 2000 else ''}\n```"
+        return (
+            f"📤 Exported {len(trades)} trades to `{out_path}`\n\n"
+            f"```\n{content[:2000]}{'...[truncated]' if len(content) > 2000 else ''}\n```\n\n"
+            f"_To refresh TRADE_LOG.md in the repo from the live journal, run:_\n"
+            f"```\npython3 scripts/update_trade_log.py\n```"
+        )
 
     def _cmd_skills(self, ctx: AgentContext) -> str:
         return self.skills.list_skills_for_display()

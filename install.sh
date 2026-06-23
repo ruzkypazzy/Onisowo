@@ -7,7 +7,7 @@ INSTALL_DIR="/opt/akanji"
 REPO_URL="https://github.com/ruzkypazzy/Akanji-Onisowo.git"
 
 echo "═══════════════════════════════════════════════════════════"
-echo "  Àkànjí Oníṣòwò — Yoruba AI Trading Agent for Bitget"
+echo "  Àkànjí Oníṣòwò — AI Trading Agent for Bitget"
 echo "═══════════════════════════════════════════════════════════"
 echo ""
 
@@ -60,6 +60,11 @@ if [ ! -f ".env" ]; then
     read -p "BITGET_SECRET_KEY: " BG_SECRET
     read -p "BITGET_PASSPHRASE: " BG_PASS
     read -p "BITGET_QWEN_API_KEY (Qwen 3.6 Plus): " QWEN_KEY
+    echo ""
+    echo "Optional: lock the bot to your Telegram user ID (recommended)."
+    echo "  • Without this, anyone who finds the bot can trade on your account."
+    echo "  • To find your ID: message @userinfobot on Telegram."
+    read -p "OWNER_TELEGRAM_ID (press Enter to skip): " OWNER_ID
 
     cat > .env <<EOF
 # Àkànjí Oníṣòwò — generated $(date)
@@ -68,6 +73,7 @@ BITGET_API_KEY=${BG_KEY}
 BITGET_SECRET_KEY=${BG_SECRET}
 BITGET_PASSPHRASE=${BG_PASS}
 BITGET_QWEN_API_KEY=${QWEN_KEY}
+OWNER_TELEGRAM_ID=${OWNER_ID}
 EOF
     echo "✓ .env created"
 fi

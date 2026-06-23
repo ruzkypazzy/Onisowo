@@ -123,12 +123,11 @@ def _friendly_model_name(model_id: str) -> str:
 def _wat_greeting() -> str:
     """Return a Yoruba greeting appropriate for the current time in WAT (UTC+1, Lagos/Abuja).
 
-    Yoruba solfège: re (do'), mi (re), do (mi), etc. We use the standard Yoruba greetings:
-    - Ọniṣọwọ́ káàlẹ́   — generic "good day" (safe default)
-    - Ọniṣọwọ́ ẹ káàrọ̀  — "good morning" (before noon)
-    - Ọniṣọwọ́ ẹ káàsán  — "good afternoon" (noon–4pm)
-    - Ọniṣọwọ́ ẹ káàlẹ́  — "good evening" (4pm–7pm, also generic fallback)
-    - Ọniṣọwọ́ ẹ káàlẹ́ òru — "good night" (7pm–5am)
+    Time-of-day map (canonical, locked in 2026-06-23):
+      - 04:00 – 11:59  -> "Ekaaro"      (morning, ☀️)
+      - 12:00 – 15:59 -> "Ekaasan"     (afternoon, 🌤️)
+      - 16:00 – 18:59 -> "Eku irole"   (evening, 🌇)
+      - 19:00 – 03:59 -> "Ekaale"      (night, 🌙)
 
     All times computed in WAT regardless of server timezone, so the bot greets
     its target audience (West African users) on their local clock.
@@ -138,14 +137,14 @@ def _wat_greeting() -> str:
     now_wat = datetime.now(wat)
     hour = now_wat.hour
 
-    if 5 <= hour < 12:
-        return "Ọniṣọwọ́ ẹ káàrọ̀ ☀️"  # good morning
+    if 4 <= hour < 12:
+        return "Ọlà kààrọ̀! Ẹ káàrọ̀ ☀️"  # good morning (Ekaaro)
     elif 12 <= hour < 16:
-        return "Ọniṣọwọ́ ẹ káàsán 🌤️"  # good afternoon
+        return "Ọlà kààṣán! Ẹ káàsán 🌤️"  # good afternoon (Ekaasan)
     elif 16 <= hour < 19:
-        return "Ọniṣọwọ́ ẹ káàlẹ́ 🌇"  # good evening
+        return "Ọlà kà ìdí! Ẹ kú irolẹ́ 🌇"  # welcome to the market (Eku irole)
     else:
-        return "Ọniṣọwọ́ ẹ káàlẹ́ òru 🌙"  # good night
+        return "Ọlà kààlé! Ẹ káàlé 🌙"  # good night (Ekaale)
 
 
 # Built once at import time, then re-built if env changes (e.g., tests)
@@ -370,30 +369,45 @@ class Agent:
         model = os.environ.get("QWEN_MODEL", "qwen3.6-plus")
         display = _friendly_model_name(model)
         base_url = os.environ.get("QWEN_BASE_URL", "https://hackathon.bitgetops.com/v1")
-        is_qwen = "qwen" in model.lower()
-        brain_line = (
-            f"*Powered by:* {display} (Alibaba Cloud, via Bitget hackathon proxy)"
-            if is_qwen
-            else f"*LLM brain:* {display}"
+        is_owner = (getattr(self, "_owner_id", 0) == 0) or (ctx.user_id == getattr(self, "_owner_id", 0))
+        # The full intro — who Àkànjí is, what the bot does, how it works.
+        # Same content for owner and non-owner; only the install line differs.
+        install_hint = "" if is_owner else (
+            "\n\n📦 *You are in demo mode.*\n"
+            "This bot is locked to its owner. To run your own copy:\n"
+            "```\n"
+            "git clone https://github.com/ruzkypazzy/Akanji-Onisowo\n"
+            "cd Akanji-Onisowo && bash install.sh\n"
+            "```\n"
+            "5 minutes. Your keys, your VPS, your trades.\n"
         )
         return (
-            "*Oniṣòwò* (oh-nee-SHAW-woh) — Yoruba for *merchant*.\n\n"
-            "Built by [@ruzkypazzy](https://github.com/ruzkypazzy) for the "
-            "[Bitget AI Base Camp Hackathon S1](https://bitget-ai.gitbook.io/base-camp-hackathon-s1-en).\n\n"
-            f"{brain_line}\n"
-            f"*Endpoint:* `{base_url}`\n\n"
-            "*Stack:*\n"
-            "• *LLM:* Qwen 3.6 Plus (Alibaba Cloud) — every reasoning call goes through Qwen\n"
-            "• *Exchange:* Bitget spot + futures (58 API tools)\n"
-            "• *Surface:* Telegram (you are here)\n"
-            "• *Storage:* SQLite (local file)\n"
-            "• *Code:* Python 3.10+, open-source, MIT\n\n"
-            "*Differentiation:*\n"
-            "• *186 skills* organized in 10 tiers (vs typical 5-10) — including 71 technical indicators\n"
-            "• *Multi-agent debate (TradingAgents-style)* — bull + bear + research manager before each trade\n"
-            "• *Recursive self-improvement* — reviews past trades, writes new rules to memory\n"
-            "• *Qwen-powered* — Qwen 3.6 Plus is the brain; every decision is a Qwen decision\n"
-            "• *Self-hostable* — your keys never leave your machine\n\n"
+            "🎲 *Àkànjí Oníṣòwò — AI Trading Agent*\n\n"
+            "*Who is Àkànjí?*\n"
+            "  · *Àkànjí* is a Yoruba first name.\n"
+            "  · *Oníṣòwò* means *trader* in Yoruba.\n"
+            "  · So Àkànjí Oníṣòwò means “Àkànjí is a trader.”\n\n"
+            "In the story, Àkànjí is a real man — a seasoned trader who moved from the open-air markets of West Africa, to global financial floors, and deep into the Web3 space. He sees the market before it moves. This bot carries his name because it carries his instincts.\n\n"
+            "*What is this bot?*\n"
+            "An open-source AI trading agent that lives in your Telegram. It scans the crypto market, picks a trade, sizes it with risk math, sets TP/SL, executes on Bitget, journals the decision, and learns from every loss. One command — `/pick` — and the whole loop runs.\n\n"
+            "*How it works (the 4-stage loop):*\n"
+            "  1. *Perceive* — 190+ skills: 71 technical indicators, funding rate, regime detector, candle structure, orderbook depth.\n"
+            "  2. *Decide* — Qwen 3.6 Plus is the brain. It calls skills, returns a long/short/skip with confidence, TP%, SL%.\n"
+            "  3. *Execute* — Places the order on Bitget via V3 UTA endpoints, attaches TP/SL as a strategy order (one atomic call).\n"
+            "  4. *Reflect* — Reviews the last 7 days, computes win rate, runs `loss_autopsy` on losing trades, writes a new rule to memory.\n\n"
+            "*Built with:*\n"
+            f"  · *Brain:* {display} (Alibaba Cloud)\n"
+            f"  · *Endpoint:* `{base_url}`\n"
+            "  · *Broker:* Bitget spot + futures (UTA, V3 endpoints)\n"
+            "  · *Surface:* Telegram\n"
+            "  · *Storage:* SQLite (your local file)\n"
+            "  · *Code:* Python 3.10+, MIT licensed\n\n"
+            "*Self-hostable. Your keys. Your VPS.*\n"
+            "```\n"
+            "git clone https://github.com/ruzkypazzy/Akanji-Onisowo\n"
+            "cd Akanji-Onisowo && bash install.sh\n"
+            "```"
+            f"{install_hint}\n"
             "Source: [github.com/ruzkypazzy/Akanji-Onisowo](https://github.com/ruzkypazzy/Akanji-Onisowo)"
         )
 
@@ -2156,9 +2170,25 @@ class Agent:
         try:
             with open(out_path, "w") as f:
                 f.write(content)
-            return f"📤 Exported {len(trades)} trades to `{out_path}`\n\n```\n{content[:2000]}{'...[truncated]' if len(content) > 2000 else ''}\n```"
-        except Exception as e:
-            return f"❌ Export failed: {e}\n\n```\n{content[:1500]}\n```"
+        except Exception:
+            out_path = "(in-memory only)"
+        # If we're running self-hosted, also refresh TRADE_LOG.md
+        # so the file in the repo stays in sync with the live journal.
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["python3", "scripts/update_trade_log.py"],
+                capture_output=True, text=True, timeout=15
+            )
+            if result.returncode == 0:
+                return (
+                    f"📤 Exported {len(trades)} trades to `{out_path}`\n"
+                    f"🔄 TRADE_LOG.md refreshed: {result.stdout.strip()}\n\n"
+                    f"```\n{content[:2000]}{'...[truncated]' if len(content) > 2000 else ''}\n```"
+                )
+        except Exception:
+            pass
+        return f"📤 Exported {len(trades)} trades to `{out_path}`\n\n```\n{content[:2000]}{'...[truncated]' if len(content) > 2000 else ''}\n```"
 
     def _cmd_skills(self, ctx: AgentContext) -> str:
         return self.skills.list_skills_for_display()
@@ -3380,7 +3410,7 @@ class Agent:
             user_intent_reason = ctx.user_message if hasattr(ctx, "user_message") else ""
             advisory = {}
             try:
-                advisory = self.skills.call(
+                advisory = self.skills.invoke(
                     "advise_before_trade",
                     symbol=symbol,
                     side=side,

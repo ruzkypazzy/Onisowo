@@ -263,7 +263,7 @@ class TestWATGreeting(unittest.TestCase):
         from agent.core import _wat_greeting
         greeting = _wat_greeting()
         # All 4 valid greetings + the "áàlẹ́" base should be in the result
-        valid_keywords = ["káàrọ̀", "káàsán", "káàlẹ́"]
+        valid_keywords = ["káàrọ̀", "káàsán", "kú irolẹ́", "káàlé"]
         self.assertTrue(
             any(kw in greeting for kw in valid_keywords),
             f"Got: {greeting!r}"
@@ -277,8 +277,12 @@ class TestWATGreeting(unittest.TestCase):
         # If the bot's host is in UTC, current WAT hour = UTC hour + 1
         # Just verify the function doesn't crash and returns a string with a Yoruba marker
         greeting = _wat_greeting()
-        self.assertIn("Ọniṣọwọ́", greeting, "Should use Ọniṣọwọ́ prefix")
-        self.assertIn("ẹ", greeting, "Should use Yoruba second-person 'ẹ' marker")
+        # The new format uses "Ọlà kààrọ̀" etc. with the time-of-day suffix.
+        # We just check that the greeting contains a Yoruba marker.
+        self.assertTrue(
+            any(kw in greeting for kw in ["Ọlà", "káàrọ̀", "káàsán", "kú irolẹ́", "káàlé"]),
+            f"Should use Yoruba greeting, got: {greeting!r}"
+        )
         print(f"  ✓ _wat_greeting uses WAT timezone, returns: {greeting}")
 
     def test_advise_before_trade_skill_registered(self):

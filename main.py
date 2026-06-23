@@ -39,12 +39,17 @@ def main():
     # Print a friendly startup banner
     print()
     print("=" * 60)
-    print("  Ọniṣọwọ́ (Oniṣòwò) — Yoruba AI Trading Agent")
+    print("  Àkànjí Oníṣòwò — AI Trading Agent")
     print("=" * 60)
     print()
     print(f"  Bitget:    {'✓' if os.environ.get('BITGET_API_KEY') else '✗'}")
     print(f"  Qwen:      {'✓' if os.environ.get('BITGET_QWEN_API_KEY') else '✗'}")
     print(f"  Telegram:  {'✓' if os.environ.get('TELEGRAM_BOT_TOKEN') else '✗'}")
+    owner_id = os.environ.get('OWNER_TELEGRAM_ID', '').strip()
+    if owner_id:
+        print(f"  Owner ID:  ✓ (locked to user_id={owner_id})")
+    else:
+        print(f"  Owner ID:  ✗ UNLOCKED — anyone can trade! Set OWNER_TELEGRAM_ID in .env")
     print(f"  Database:  {os.environ.get('DATABASE_PATH', './db/onisowo.db')}")
     print(f"  Max trade: ${os.environ.get('MAX_TRADE_USD', '2.00')}")
     print(f"  Max DD:    {float(os.environ.get('MAX_DRAWDOWN_PCT', '0.30'))*100:.0f}%")

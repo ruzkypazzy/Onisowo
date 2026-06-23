@@ -214,6 +214,12 @@ echo ""
 echo "  Qwen / LLM API key (Bitget hackathon or your own):"
 prompt_env "BITGET_QWEN_API_KEY"  "  Qwen API key"
 
+echo ""
+echo "  Owner gate (locks the bot to your Telegram user ID):"
+echo "    Without this, anyone who finds @OnisowoBot can trade on your account."
+echo "    To find your ID: message @userinfobot on Telegram."
+prompt_env "OWNER_TELEGRAM_ID"   "  Your Telegram user ID (press Enter to skip)"
+
 chmod 600 .env
 echo "  ✓ .env saved (chmod 600)"
 

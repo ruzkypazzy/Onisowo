@@ -1,4 +1,4 @@
-# Àkànjí Oníṣòwò — Yoruba AI Trading Agent for Bitget, Powered by Qwen 3.6 Plus
+# Àkànjí Oníṣòwò — AI Trading Agent for Bitget, Powered by Qwen 3.6 Plus
 
 > *Àkànjí Oníṣòwò* (ah-KHAN-jee oh-nee-SHAW-woh) — Yoruba for *"Àkànjí the trader."*
 > An open-source, self-hostable AI trading agent that lives in your Telegram, with **Qwen 3.6 Plus** as its brain.
@@ -163,17 +163,20 @@ nano .env   # fill in 5 values (see below)
 python main.py
 ```
 
-You need 5 env vars (all yours, never shared):
+You need 6 env vars (5 required, 1 recommended):
 
-| Variable | Where to get it |
-|---|---|
-| `TELEGRAM_BOT_TOKEN` | Create a bot via [@BotFather](https://t.me/BotFather), `/newbot`, get the token |
-| `BITGET_API_KEY` | [Bitget](https://www.bitget.com) → Account → API Management → Create API Key (**Read+Trade, NO Withdraw**) |
-| `BITGET_SECRET_KEY` | Same flow as API Key |
-| `BITGET_PASSPHRASE` | You set this when creating the API key |
-| `BITGET_QWEN_API_KEY` | **Qwen 3.6 Plus** credits — check the email Bitget sent you ($30 free), or grab your own from [Alibaba Cloud](https://www.alibabacloud.com) |
+| Variable | Required? | Where to get it |
+|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | required | Create a bot via [@BotFather](https://t.me/BotFather), `/newbot`, get the token |
+| `BITGET_API_KEY` | required | [Bitget](https://www.bitget.com) → Account → API Management → Create API Key (**Read+Trade, NO Withdraw**) |
+| `BITGET_SECRET_KEY` | required | Same flow as API Key |
+| `BITGET_PASSPHRASE` | required | You set this when creating the API key |
+| `BITGET_QWEN_API_KEY` | required | **Qwen 3.6 Plus** credits — check the email Bitget sent you ($30 free), or grab your own from [Alibaba Cloud](https://www.alibabacloud.com) |
+| `OWNER_TELEGRAM_ID` | **recommended** | Message [@userinfobot](https://t.me/userinfobot) on Telegram, copy your numeric ID. Without this, anyone who finds your bot can trade on your account. With this set, only you can run real-trade commands. |
 
 **API key safety**: Always create your Bitget API key with **Withdraw disabled**. Àkànjí cannot withdraw your funds — only trade with them.
+
+**Owner gate**: Set `OWNER_TELEGRAM_ID` in `.env` and restart. The bot will reject all real-trade commands from any other Telegram user, but they'll still see `/demo`, `/tour`, `/skills`, and the install command. Demo mode is automatic for everyone except you.
 
 ---
 
@@ -228,7 +231,7 @@ python main.py
 ```bash
 sudo tee /etc/systemd/system/akanji.service > /dev/null <<EOF
 [Unit]
-Description=Àkànjí Oníṣòwò — Yoruba AI Trading Agent
+Description=Àkànjí Oníṣòwò — AI Trading Agent
 After=network.target
 
 [Service]
@@ -343,23 +346,66 @@ sudo journalctl -u akanji -f    # live logs
 - **V3 + V2 fallback** for every Bitget endpoint
 - **UTA-compatible** (Unified Trading Account) — works on the latest Bitget account tier
 
----
-
-## 🏆 Hackathon submission
-
-This project was built for the [Bitget AI Base Camp Hackathon S1](https://bitget-ai.gitbook.io/base-camp-hackathon-s1-en) (May 27 – June 30, 2026, $50K prize pool).
-
-- **Track**: 1 — Trading Agent
-- **Submission type**: Open-source, self-hostable
-- **Demo link**: https://t.me/OnisowoBot (the live bot, public, anyone can message)
-- **Repo**: https://github.com/ruzkypazzy/Akanji-Onisowo
-- **Submission writeup**: [see SUBMISSION.md](SUBMISSION.md)
-
----
-
 ## 📜 License
 
 MIT — do whatever, just don't blame us if your agent gets rekt.
+
+---
+
+## 📝 Note to Reviewer
+
+If you're a judge for the Bitget AI Base Camp Hackathon, here's how to evaluate this project:
+
+### Step 1: Try the live bot (demo mode, no real money)
+
+The public Telegram bot is at **[@OnisowoBot](https://t.me/OnisowoBot)**. Open the link in Telegram and you'll see the bot greets you. The bot is **locked to its owner** for trading, but you can still explore everything in safe demo mode.
+
+**Type these commands in order:**
+
+1. **`/start`** — see the demo-mode landing page (the bot is locked, but lists what you can do)
+2. **`/about`** — read the full origin story of Àkànjí, the 4-stage loop, and the stack
+3. **`/skills`** — see all 190+ skills the agent uses (71 technical indicators, regime detector, etc.)
+4. **`/demo`** — a 60-second scripted trade demo showing what `/pickfuture` would output
+5. **`/tour`** — walk through 14 real closed trades with the full skill trail and reasoning
+
+All five commands are read-only. No real orders. No real money. Safe for anyone.
+
+### Step 2: Look at the source
+
+This is fully open-source. The repo at [github.com/ruzkypazzy/Akanji-Onisowo](https://github.com/ruzkypazzy/Akanji-Onisowo) has:
+
+- **190+ skills** across 10 tiers (look at `skills/registry.py`)
+- **Live trading log** in `TRADE_LOG.md` (auto-generated from the running bot's journal)
+- **Submission writeup** in `SUBMISSION_FORM.md` (the 4-section project description)
+- **The agent loop** in `agent/core.py` (perceive → decide → execute → reflect)
+- **The strategist** in `agent/strategist.py` (the autonomous loop that scans and trades)
+- **41 unit tests** that pass: `python3 -m unittest tests.test_smoke`
+- **One-shot install** that gets you running in 5 minutes: `bash install.sh`
+
+### Step 3: Try it for real (optional)
+
+If you want to use Àkànjí with your own Bitget account:
+
+```bash
+git clone https://github.com/ruzkypazzy/Akanji-Onisowo
+cd Akanji-Onisowo
+bash install.sh   # 5 minutes, prompts for 6 env vars
+python main.py
+```
+
+The installer creates a Python venv, installs deps, generates `.env` from your inputs, and sets up a systemd service. Your API keys stay on your machine — the bot only trades with them, never withdraws.
+
+**Important**: Create your Bitget API key with **Read + Trade only**, **Withdraw disabled**. Àkànjí cannot withdraw your funds; only place orders.
+
+### What to look for
+
+- **190+ skills, all callable** — `/skills` lists them all
+- **Qwen 3.6 Plus is the brain** — every reasoning line in `/journal` was generated by Qwen
+- **Self-critique is real** — `loss_autopsy`, `edge_half_life_tracker`, weekly `/reflect`
+- **Honest failure modes** — the agent can lose, and it tells you why (`/tour` shows the loss_autopsy tags)
+- **Open source, your keys, your VPS** — the install really is 5 minutes
+
+If you have questions, message me on X ([@ruzkypazzy](https://github.com/ruzkypazzy)) or open an issue on GitHub.
 
 ---
 

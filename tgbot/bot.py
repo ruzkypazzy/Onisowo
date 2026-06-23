@@ -109,7 +109,7 @@ def parse_command_args(text: str) -> tuple[str, dict]:
                "review", "reflect", "memory", "risk", "release", "settings", "pnl",
                "llm", "llms", "time", "abort", "strategy", "positions",
                "analyze", "autotrade", "proceed", "intro", "control",
-               "pick", "pickspot", "pickfuture", "daily", "history", "export", "showlog"):
+               "pick", "pickspot", "pickfuture", "daily", "history", "export", "showlog", "sync"):
         return (cmd, {})
 
     if cmd == "strategist":
@@ -159,6 +159,7 @@ def run_bot(token: Optional[str] = None):
             BotCommand("proceed", "execute the pending analysis"),
             BotCommand("abort", "cancel a pending advisory or analysis"),
             BotCommand("close", "close open positions (id, symbol, or all)"),
+            BotCommand("sync", "sync journal with live Bitget (catches manual closes)"),
             BotCommand("autotrade", "autonomous mode: scan + pick + execute"),
             BotCommand("pick", "scan market, pick best trade (auto spot/futures by analysis)"),
             BotCommand("pickspot", "force spot trade (not futures)"),

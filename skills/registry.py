@@ -293,7 +293,12 @@ class SkillsRegistry:
     # -------------------------------------------------------------------------
 
     def invoke(self, name: str, args: dict) -> dict:
-        """Invoke a skill by name with args. Returns the result."""
+        """Invoke a skill by name with args. Returns the result.
+
+        Also records the skill name in the active skill trace, so when
+        a trade is recorded, the journal knows which skills contributed
+        to the decision (proves the 100+ skill catalog is in use).
+        """
         # Fuzzy match: if Qwen invents a skill name, find the closest known one
         if name not in self.skills:
             fuzzy = self._fuzzy_skill_match(name)
@@ -306,6 +311,8 @@ class SkillsRegistry:
                     "available": list(self.skills.keys())[:20],
                 }
 
+        # Record in the active skill trace
+        self._trace_skill(name)
         skill = self.skills[name]
         try:
             result = skill.func(**args)
@@ -313,6 +320,21 @@ class SkillsRegistry:
         except Exception as e:
             logger.exception(f"Skill {name} failed: {e}")
             return {"ok": False, "skill": name, "error": str(e)}
+
+    def _trace_skill(self, name: str):
+        """Record a skill call in the trace for the current decision."""
+        if not hasattr(self, "_skill_trace"):
+            self._skill_trace = []
+        if name not in self._skill_trace:
+            self._skill_trace.append(name)
+
+    def get_skill_trace(self) -> list:
+        """Return the list of skills called in the current decision trace."""
+        return getattr(self, "_skill_trace", [])
+
+    def clear_skill_trace(self):
+        """Reset the skill trace (call after a trade is recorded)."""
+        self._skill_trace = []
 
     def _fuzzy_skill_match(self, name: str) -> Optional[str]:
         """Find the closest known skill name for a hallucinated or mistyped one.
@@ -1337,8 +1359,20 @@ class SkillsRegistry:
         """
         try:
             size_base = (size_usd / price) if price > 0 else 0
-            # Default skills_used to a list of the most common core trading skills
-            # so the journal never has an empty list
+            # Merge the active skill trace (every skill Qwen called in this
+            # decision cycle) with the explicit skills_used list. This way
+            # /journal shows the FULL trail of skills that touched the
+            # trade, not just 5-6 hand-picked ones.
+            trace = self.get_skill_trace()
+            if trace:
+                # Combine, preserving order, dedup
+                seen = set()
+                combined = []
+                for s in (skills_used or []) + trace:
+                    if s not in seen:
+                        seen.add(s)
+                        combined.append(s)
+                skills_used = combined
             if not skills_used:
                 skills_used = [
                     "get_ticker", "risk_check_order", "suggest_tp_sl",
@@ -1359,6 +1393,8 @@ class SkillsRegistry:
                 sl_pct=sl_pct if sl_pct > 0 else 4.0,
                 thesis=thesis,
             )
+            # Clear the trace so the next decision starts fresh
+            self.clear_skill_trace()
             return {"ok": True, "trade_id": trade_id, "symbol": symbol, "side": side, "size_usd": size_usd}
         except Exception as e:
             return {"ok": False, "error": f"record_trade failed: {e}"}

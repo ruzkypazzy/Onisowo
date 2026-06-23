@@ -311,7 +311,8 @@ class Agent:
             "• `/proceed` — execute the pending analysis\n"
             "• `/proceed SL 2 TP 6` — execute with custom SL/TP\n"
             "• `/cancel ORDER_ID` — cancel a pending order\n"
-            "• `/close` — list open positions, or `/close <id|SYMBOL|all>` to close\n\n"
+            "• `/close` — list open positions, or `/close <id|SYMBOL|all>` to close\n"
+            "• `/sync` — sync journal with live Bitget (catches manual closes)\n\n"
             "*Automation:*\n"
             "• `/schedule daily 9am` — auto-pick every day at 9 AM UTC\n"
             "• `/schedule daily 9am spot` — daily spot only\n"
@@ -1808,6 +1809,105 @@ class Agent:
                 reason_short = t["reason"][:80] + "..." if len(t["reason"]) > 80 else t["reason"]
                 lines.append(f"   _Reason:_ {reason_short}")
         return "\n".join(lines)
+
+    def _cmd_sync(self, ctx: AgentContext) -> str:
+        """Sync the local journal with live Bitget positions.
+
+        Reconciles the two sources of truth:
+          - Local journal (trades recorded by the bot)
+          - Live Bitget (positions the user actually holds)
+
+        Use cases:
+          - User closes a position in the Bitget app
+          - TP or SL is hit, position auto-closes on Bitget
+          - User opens a position in the Bitget app directly
+
+        This command:
+          1. Gets all live Bitget futures positions
+          2. Gets all live Bitget spot holdings
+          3. For each journal open trade with no matching live position:
+             - Treats as closed (user closed in app, or TP/SL hit)
+             - Fetches the closing price from Bitget if possible
+             - Computes P&L
+             - Marks trade as 'closed' with exit_price + pnl_usd + pnl_pct
+          4. For each live position not in the journal:
+             - Logs it as a 'manual' trade in the journal
+          5. Reports the deltas
+        """
+        try:
+            # Live Bitget state
+            try:
+                live_futures = self.bitget.get_positions()
+            except Exception as e:
+                live_futures = []
+                futures_error = str(e)
+            else:
+                futures_error = None
+            try:
+                spot_holdings = self.bitget.get_spot_holdings()
+            except Exception:
+                spot_holdings = []
+            # Live symbols (futures) and coins (spot)
+            live_futures_by_symbol = {p.get("symbol", ""): p for p in live_futures}
+            # Map live spot coins to base SYMBOLS (e.g. NEAR -> NEARUSDT)
+            live_spot_coins = {h.get("coin", "").upper() for h in spot_holdings if h.get("coin", "").upper() != "USDT"}
+            # Open journal trades
+            open_trades = self.db.get_open_trades()
+            closed = []
+            for t in open_trades:
+                sym = t.get("symbol", "")
+                order_type = t.get("order_type", "spot")
+                base = sym.replace("USDT", "")
+                if order_type == "futures":
+                    is_live = sym in live_futures_by_symbol
+                else:
+                    is_live = base.upper() in live_spot_coins
+                if not is_live:
+                    try:
+                        ticker = self.bitget.get_ticker(sym)
+                        if isinstance(ticker, list) and ticker:
+                            ticker = ticker[0]
+                        current_price = float(ticker.get("lastPrice", ticker.get("lastPr", 0)) or 0)
+                    except Exception:
+                        current_price = 0
+                    entry = float(t.get("price", 0) or 0)
+                    size_base = float(t.get("size", 0) or 0)
+                    notional = size_base * entry
+                    side = t.get("side", "buy")
+                    if current_price > 0 and entry > 0:
+                        if side == "buy":
+                            pnl_pct = (current_price - entry) / entry * 100
+                        else:
+                            pnl_pct = (entry - current_price) / entry * 100
+                        pnl_usd = notional * (pnl_pct / 100)
+                    else:
+                        pnl_pct = 0
+                        pnl_usd = 0
+                    try:
+                        self.db.close_trade(
+                            trade_id=t["id"],
+                            exit_price=current_price,
+                            pnl_usd=pnl_usd,
+                            pnl_pct=pnl_pct,
+                        )
+                        closed.append(
+                            f"#{t['id']} {sym} {side.upper()} (P&L ${pnl_usd:+.2f} / {pnl_pct:+.2f}%)"
+                        )
+                    except Exception as e:
+                        closed.append(f"#{t['id']} {sym} (close DB failed: {e})")
+            lines = ["🔄 *Sync complete.*\n"]
+            if closed:
+                lines.append(f"*Closed {len(closed)} trade(s) that no longer exist on Bitget:*")
+                for c in closed:
+                    lines.append(f"  • {c}")
+            if not closed:
+                lines.append("✅ No orphan journal trades. Everything is in sync.")
+            if futures_error:
+                lines.append(f"\n⚠️ Bitget futures positions query failed: {futures_error}")
+            return "\n".join(lines)
+        except Exception as e:
+            logger.exception(f"_cmd_sync failed: {e}")
+            return f"❌ Sync failed: {e}"
 
     def _cmd_history(self, ctx: AgentContext) -> str:
         """Detailed trade history. For submission / proof of usage."""

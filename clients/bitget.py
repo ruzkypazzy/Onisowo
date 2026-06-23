@@ -27,6 +27,9 @@ import hmac
 import hashlib
 from typing import Any, Optional
 import requests
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class BitgetClient:

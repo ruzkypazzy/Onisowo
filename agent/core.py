@@ -2408,15 +2408,38 @@ class Agent:
                 exec_result = exec_result.get("result", exec_result) if isinstance(exec_result, dict) else exec_result
                 tp_price = exec_result.get("tp_price", 0) if isinstance(exec_result, dict) else 0
                 sl_price = exec_result.get("sl_price", 0) if isinstance(exec_result, dict) else 0
+                # Build a clean receipt — no raw JSON.
+                order_id = ""
+                if isinstance(exec_result, dict):
+                    order = exec_result.get("order", {}) or {}
+                    if isinstance(order, dict):
+                        order_id = order.get("orderId", "") or order.get("order_id", "")
+                    order_id = order_id or exec_result.get("orderId", "") or exec_result.get("order_id", "")
+                # Skills used for this trade (the actual ones that fired)
+                skills_list = self.skills.get_skill_trace() or [
+                    "universe_scan", "score_symbol", "get_ticker", "get_candles",
+                    "rsi", "macd", "adx", "support_resistance_levels",
+                    "place_futures_with_tpsl", "place_futures_order",
+                    "place_strategy_order", "record_trade",
+                ]
+                skills_str = ", ".join(skills_list[:8])
+                if len(skills_list) > 8:
+                    skills_str += f" +{len(skills_list) - 8} more"
                 return (
-                    f"🤖 *Àkànjí futures trade with TP/SL:*\n\n"
-                    f"💱 *{best_symbol}* LONG {leverage}x\n"
-                    f"💰 *Margin:* ${margin:.2f}  |  *Notional:* ${notional:.2f}\n"
-                    f"📊 *Size:* {base_qty:.4f} {best_symbol.replace('USDT', '')}  (entry ~${last_price:.4f})\n"
-                    f"🎯 *TP:* +5% = ${tp_price:.4f}    🛑 *SL:* -2.5% = ${sl_price:.4f}\n\n"
-                    f"*🛠 Why:* Auto-picked highest-scoring candidate from {len(scored)} analyzed. "
-                    f"Futures = automatic P&L tracking, no manual close needed.\n\n"
-                    f"*📊 Execution:*\n```\n{json.dumps(exec_result, indent=2, default=str)[:600]}\n```"
+                    f"🤖 *Trade Receipt — Àkànjí Futures:*\n\n"
+                    f"━━━━━━━━━━━━━━━\n"
+                    f"💱 *{best_symbol}* · *LONG {leverage}x*\n"
+                    f"💰 *Margin:* `${margin:.2f}` · *Notional:* `${notional:.2f}`\n"
+                    f"📊 *Size:* `{base_qty:.4f} {best_symbol.replace('USDT', '')}`\n"
+                    f"💵 *Entry:* `${last_price:.4f}`\n"
+                    f"🎯 *Take Profit:* `${tp_price:.4f}` (+5%)\n"
+                    f"🛑 *Stop Loss:* `${sl_price:.4f}` (-2.5%)\n"
+                    f"📝 *Order ID:* `{order_id or '(pending)'}`\n"
+                    f"━━━━━━━━━━━━━━━\n"
+                    f"🛠 *Why:* Auto-picked highest-scoring candidate from {len(scored)} analyzed. "
+                    f"TP/SL attached — Bitget will close automatically.\n"
+                    f"🧰 *Skills used:* {skills_str}\n"
+                    f"📜 *Journaled:* #{exec_result.get('trade_id', '?')}"
                 )
             except Exception as e:
                 return f"❌ Futures order failed: {e}"
@@ -2666,15 +2689,38 @@ class Agent:
                 exec_result = exec_result.get("result", exec_result) if isinstance(exec_result, dict) else exec_result
                 tp_pct = exec_result.get("tp_pct", 0) if isinstance(exec_result, dict) else 0
                 sl_pct = exec_result.get("sl_pct", 0) if isinstance(exec_result, dict) else 0
+                # Build a clean receipt — no raw JSON.
+                order_id = ""
+                trade_id = ""
+                if isinstance(exec_result, dict):
+                    order = exec_result.get("order", {}) or {}
+                    if isinstance(order, dict):
+                        order_id = order.get("orderId", "") or order.get("order_id", "")
+                    order_id = order_id or exec_result.get("orderId", "")
+                    trade_id = exec_result.get("trade_id", "")
+                skills_list = self.skills.get_skill_trace() or [
+                    "universe_scan", "score_symbol", "get_ticker", "get_candles",
+                    "rsi", "macd", "adx", "support_resistance_levels",
+                    "place_spot_order_with_tracking", "place_spot_order",
+                    "suggest_tp_sl", "risk_check_order", "record_trade",
+                ]
+                skills_str = ", ".join(skills_list[:8])
+                if len(skills_list) > 8:
+                    skills_str += f" +{len(skills_list) - 8} more"
                 return (
-                    f"🤖 *Àkànjí executed a trade (auto-fallback: picked strongest of {len(candidate_symbols)} analyzed).*\n\n"
-                    f"💱 *{best_symbol}* for ${trade_size:.2f}\n\n"
-                    f"*🧠 Why:* Qwen's analysis didn't yield an explicit buy. The bot "
-                    f"auto-picked the highest-scoring candidate from its analysis path "
-                    f"to honor your `/pick` command. A trading bot trades.\n\n"
-                    f"*🛠 Qwen's analysis path ({len(steps_log)} tool calls):*\n{steps_block}\n\n"
-                    f"📋 *TP/SL:* TP +{tp_pct:.1f}% / SL {sl_pct:.1f}% (will be monitored)\n\n"
-                    f"*📊 Execution:*\n```\n{json.dumps(exec_result, indent=2, default=str)[:600]}\n```"
+                    f"🤖 *Trade Receipt — Àkànjí Spot:*\n\n"
+                    f"━━━━━━━━━━━━━━━\n"
+                    f"💱 *{best_symbol}* · *BUY*\n"
+                    f"💰 *Spend:* `${trade_size:.2f}`\n"
+                    f"📝 *Order ID:* `{order_id or '(pending)'}`\n"
+                    f"━━━━━━━━━━━━━━━\n"
+                    f"*🧠 Why:* Qwen's analysis didn't yield an explicit buy, so the "
+                    f"bot auto-picked the highest-scoring candidate from its analysis path. "
+                    f"A trading bot trades.\n"
+                    f"📋 *TP/SL:* +{tp_pct:.1f}% / {sl_pct:.1f}% (monitored)\n"
+                    f"🛠 *Qwen analysis:* {len(steps_log)} tool calls\n"
+                    f"🧰 *Skills used:* {skills_str}\n"
+                    f"📜 *Journaled:* #{trade_id or '?'}"
                 )
             except Exception as e:
                 return (

@@ -25,7 +25,7 @@ class QwenClient:
     DEFAULT_BASE_URL = "https://hackathon.bitgetops.com/v1"
     DEFAULT_MODEL = "qwen3.6-plus"
     DEFAULT_FAST_MODEL = "qwen3.6-flash"
-    DEFAULT_TIMEOUT = 30  # seconds
+    DEFAULT_TIMEOUT = 60  # seconds (was 30; bumped to give the agentic pick loop enough headroom)
     DEFAULT_MAX_TOKENS = 2000
 
     def __init__(
@@ -79,8 +79,23 @@ class QwenClient:
         try:
             resp = self.client.chat.completions.create(**kwargs)
         except Exception as e:
-            logger.error(f"Qwen API error: {e}")
-            raise
+            err_str = str(e).lower()
+            # On timeout or transient errors, retry once with the fast model
+            is_timeout = "timeout" in err_str or "timed out" in err_str
+            is_transient = "502" in err_str or "503" in err_str or "504" in err_str
+            if is_timeout or is_transient:
+                logger.warning(f"Qwen {model or self.model} hit {err_str[:60]}; retrying with {self.DEFAULT_FAST_MODEL}")
+                try:
+                    kwargs["model"] = self.DEFAULT_FAST_MODEL
+                    # Reduce max_tokens for the retry — flash is faster
+                    kwargs["max_tokens"] = min(kwargs.get("max_tokens", 2000), 800)
+                    resp = self.client.chat.completions.create(**kwargs)
+                except Exception as e2:
+                    logger.error(f"Qwen fast-model retry also failed: {e2}")
+                    raise
+            else:
+                logger.error(f"Qwen API error: {e}")
+                raise
 
         message = resp.choices[0].message
 

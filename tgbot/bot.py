@@ -290,6 +290,18 @@ def run_bot(token: Optional[str] = None):
             await asyncio.sleep(0.4)
             await edit_status(status_msg, "🧮 Computing 9-signal composite score…")
             await asyncio.sleep(0.4)
+        elif cmd_name == "reflect":
+            await edit_status(status_msg, "🔍 Reading the last 7 days of trades…")
+            await asyncio.sleep(0.4)
+            await edit_status(status_msg, "🧠 Asking Qwen to write the reflection…")
+        elif cmd_name in ("pickspot", "pick"):
+            await edit_status(status_msg, "🔍 Scanning the universe of USDT pairs…")
+            await asyncio.sleep(0.4)
+            await edit_status(status_msg, "🧮 Scoring candidates with the 9-signal model…")
+        elif cmd_name == "pickfuture":
+            await edit_status(status_msg, "🔍 Scanning futures universe…")
+            await asyncio.sleep(0.4)
+            await edit_status(status_msg, "🧮 Picking best setup with TP/SL…")
             await edit_status(status_msg, "🤖 Asking Qwen for the trade thesis…")
         elif cmd_name == "autotrade":
             await edit_status(status_msg, "🔍 Scanning top 50 USDT pairs by volume…")
@@ -304,14 +316,29 @@ def run_bot(token: Optional[str] = None):
         else:
             await edit_status(status_msg, "🧠 Thinking…")
         try:
-            # /reflect /pick /agentic calls can take 30-90s (Qwen thinking + multiple tool calls)
+            # Agentic calls (Qwen thinking + 5-10 tool calls) can take 60-300s.
+            # We use 360s (6 min) as the upper bound. The Qwen client itself
+            # has a 60s per-call timeout, and retries once with the flash
+            # model on transient errors — so this outer timeout is a true
+            # safety net, not a normal-path cap.
             response = await asyncio.wait_for(
                 asyncio.to_thread(agent.handle, ctx),
-                timeout=180.0,  # 3 minutes
+                timeout=360.0,  # 6 minutes
             )
         except asyncio.TimeoutError:
             logger.error(f"Agent timeout for cmd={cmd_name}")
-            response = "⏱️ That took too long. Qwen is thinking hard. Try /reflect with a smaller window (e.g. `days=3`) or run /review for a quick P&L summary."
+            if cmd_name in ("reflect", "pickspot", "pick", "pickfuture", "autotrade"):
+                response = (
+                    "⏱️ *Qwen is taking too long.* This can happen when the agentic\n"
+                    "loop makes many tool calls in sequence. The Qwen client has a\n"
+                    "60s per-call timeout with auto-retry on the flash model.\n\n"
+                    "*Try:*\n"
+                    "  • `/pickfuture` — fewer tool calls, often completes in <30s\n"
+                    "  • `/review` — instant P&L summary, no Qwen\n"
+                    "  • Retry `/pick` — sometimes Qwen is just slow on first call"
+                )
+            else:
+                response = "⏱️ That took too long. Try /review for a quick P&L summary."
         except Exception as e:
             logger.exception(f"Agent error: {e}")
             response = f"❌ Error: {e}"
@@ -358,14 +385,29 @@ def run_bot(token: Optional[str] = None):
         else:
             await edit_status(status_msg, "🧠 Asking Qwen…")
         try:
-            # /reflect /pick /agentic calls can take 30-90s (Qwen thinking + multiple tool calls)
+            # Agentic calls (Qwen thinking + 5-10 tool calls) can take 60-300s.
+            # We use 360s (6 min) as the upper bound. The Qwen client itself
+            # has a 60s per-call timeout, and retries once with the flash
+            # model on transient errors — so this outer timeout is a true
+            # safety net, not a normal-path cap.
             response = await asyncio.wait_for(
                 asyncio.to_thread(agent.handle, ctx),
-                timeout=180.0,  # 3 minutes
+                timeout=360.0,  # 6 minutes
             )
         except asyncio.TimeoutError:
             logger.error(f"Agent timeout for cmd={cmd_name}")
-            response = "⏱️ That took too long. Qwen is thinking hard. Try /reflect with a smaller window (e.g. `days=3`) or run /review for a quick P&L summary."
+            if cmd_name in ("reflect", "pickspot", "pick", "pickfuture", "autotrade"):
+                response = (
+                    "⏱️ *Qwen is taking too long.* This can happen when the agentic\n"
+                    "loop makes many tool calls in sequence. The Qwen client has a\n"
+                    "60s per-call timeout with auto-retry on the flash model.\n\n"
+                    "*Try:*\n"
+                    "  • `/pickfuture` — fewer tool calls, often completes in <30s\n"
+                    "  • `/review` — instant P&L summary, no Qwen\n"
+                    "  • Retry `/pick` — sometimes Qwen is just slow on first call"
+                )
+            else:
+                response = "⏱️ That took too long. Try /review for a quick P&L summary."
         except Exception as e:
             logger.exception(f"Agent error: {e}")
             response = f"❌ Error: {e}"

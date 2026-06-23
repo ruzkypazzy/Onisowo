@@ -92,6 +92,15 @@ Project description (this doc) is also published at:
    https://github.com/ruzkypazzy/Akanji-Onisowo/blob/main/TRADE_LOG.md
    (or upload a `trades.csv` to the repo and paste the raw GitHub link here)
 
+✅ **Live bot** (public, no login required to view):
+   https://t.me/OnisowoBot
+   - The bot is locked to the owner's Telegram user ID for trading.
+   - Anyone can run these read-only commands in the bot:
+     - `/about` — who Àkànjí is, the 4-stage loop, the stack
+     - `/demo` — a 60-second scripted trade demo
+     - `/tour` — walk through the 23 real closed trades with the full skill trail
+   - All three are safe. No real money is touched.
+
 ### 🟦 Track 1 — Trading Agent — OPTIONAL
 
 ✅ **Backtest report** (with code/notebook):

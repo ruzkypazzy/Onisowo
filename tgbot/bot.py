@@ -85,6 +85,15 @@ def parse_command_args(text: str) -> tuple[str, dict]:
     if cmd == "price":
         return (cmd, {"symbol": rest.strip().upper() or "BTCUSDT"})
 
+    if cmd == "schedule":
+        # /schedule daily 9am futures
+        # /schedule market spot
+        # /schedule stop / /schedule status
+        return (cmd, {"raw_args": rest.strip()})
+
+    if cmd == "review":
+        return (cmd, {})
+
     if cmd == "kill":
         return (cmd, {"extra": rest.split() if rest else []})
 

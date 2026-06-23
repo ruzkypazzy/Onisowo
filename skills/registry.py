@@ -2591,10 +2591,25 @@ class SkillsRegistry:
                 ticker = self.bitget.get_ticker(symbol)
                 if isinstance(ticker, list) and ticker:
                     ticker = ticker[0]
-                last = float(ticker.get("lastPr", 0))
-                change_24h = float(ticker.get("change24h", 0))
-                high_24h = float(ticker.get("high24h", 0))
-                low_24h = float(ticker.get("low24h", 0))
+                # V3 spot uses different field names than V2:
+                #   V2 spot: lastPr, change24h, high24h, low24h
+                #   V3 spot: lastPrice, price24hPcnt, highPrice24h, lowPrice24h
+                # Try V3 first, fall back to V2.
+                def _t(field_v3, field_v2, default=0):
+                    val = ticker.get(field_v3, ticker.get(field_v2, default))
+                    try:
+                        return float(val)
+                    except (TypeError, ValueError):
+                        return default
+                last = _t("lastPrice", "lastPr", 0)
+                # price24hPcnt is a FRACTION (e.g. -0.02452 = -2.45%), so *100
+                pct = _t("price24hPcnt", "change24h", 0)
+                if abs(pct) < 1:  # if it's a fraction, convert to percent
+                    change_24h = pct * 100
+                else:
+                    change_24h = pct
+                high_24h = _t("highPrice24h", "high24h", 0)
+                low_24h = _t("lowPrice24h", "low24h", 0)
             except Exception:
                 last = tp_sl.get("entry_price", 0)
                 change_24h = 0

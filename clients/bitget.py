@@ -225,6 +225,81 @@ class BitgetClient:
         params = {"coin": coin} if coin else None
         return self._request("GET", "/api/v2/spot/account/assets", params=params)
 
+    def get_spot_holdings(self) -> list:
+        """Get all spot holdings (all non-zero coins in the spot account).
+
+        Returns a list of dicts with 'coin' and 'amount' keys. Tries V2
+        spot first, then V3 spot, then V3 unified.
+        """
+        # 1. V2 spot account
+        try:
+            resp = self._request("GET", "/api/v2/spot/account/assets")
+            data = resp.get("data", resp) if isinstance(resp, dict) else resp
+            if isinstance(data, list) and data:
+                # V2 spot returns a single asset if filtered, or full list
+                holdings = []
+                for item in data:
+                    if not isinstance(item, dict):
+                        continue
+                    coin = item.get("coinName", item.get("coin", ""))
+                    avail = float(item.get("available", "0") or 0)
+                    frozen = float(item.get("frozen", "0") or 0)
+                    if coin and (avail > 0 or frozen > 0):
+                        holdings.append({
+                            "coin": coin,
+                            "amount": avail + frozen,
+                            "available": avail,
+                            "frozen": frozen,
+                        })
+                if holdings:
+                    return holdings
+        except Exception:
+            pass
+        # 2. V3 spot
+        try:
+            resp = self._request("GET", "/api/v3/spot/account/assets")
+            data = resp.get("data", resp) if isinstance(resp, dict) else resp
+            if isinstance(data, list) and data:
+                holdings = []
+                for item in data:
+                    if not isinstance(item, dict):
+                        continue
+                    coin = item.get("coin", "")
+                    avail = float(item.get("available", "0") or 0)
+                    if coin and avail > 0:
+                        holdings.append({
+                            "coin": coin,
+                            "amount": avail,
+                            "available": avail,
+                        })
+                if holdings:
+                    return holdings
+        except Exception:
+            pass
+        # 3. V3 unified
+        try:
+            resp = self._request("GET", "/api/v3/account/assets")
+            data = resp.get("data", resp) if isinstance(resp, dict) else resp
+            assets = data.get("assets", []) if isinstance(data, dict) else data
+            if isinstance(assets, list) and assets:
+                holdings = []
+                for item in assets:
+                    if not isinstance(item, dict):
+                        continue
+                    coin = item.get("coin", "")
+                    avail = float(item.get("available", "0") or 0)
+                    if coin and avail > 0:
+                        holdings.append({
+                            "coin": coin,
+                            "amount": avail,
+                            "available": avail,
+                        })
+                if holdings:
+                    return holdings
+        except Exception:
+            pass
+        return []
+
     def get_account_balance(self, coin: str = "USDT") -> float:
         """Get available balance for a specific coin across spot and futures.
 
@@ -377,7 +452,10 @@ class BitgetClient:
         body = {k: v for k, v in body.items() if v is not None}
         # Try V3 (UTA) first, fall back to V2 for classic accounts
         try:
-            return self._request("POST", "/api/v3/trade/place-order", body=body)
+            # V3 unified endpoint REQUIRES 'category' field. V2 spot doesn't.
+            v3_body = dict(body)
+            v3_body["category"] = "spot"
+            return self._request("POST", "/api/v3/trade/place-order", body=v3_body)
         except BitgetAPIError as e:
             err = str(e)
             if "404" in err or "not found" in err.lower() or "NOT FOUND" in err:
@@ -428,14 +506,42 @@ class BitgetClient:
             raise
 
     def get_positions(self, product_type: str = "USDT-FUTURES") -> list:
-        """Get all open futures positions. Tries V3 then V2."""
+        """Get all open futures positions. Tries V3 then V2.
+
+        Returns [] for spot-only accounts (no futures positions) instead of
+        raising. This is the case for users who only do spot trading.
+        """
         params = {"productType": product_type, "marginCoin": "USDT"}
         try:
-            return self._request("GET", "/api/v3/position/all-position", params=params)
+            result = self._request("GET", "/api/v3/position/all-position", params=params)
+            if isinstance(result, list):
+                return result
+            if isinstance(result, dict) and result.get("data"):
+                inner = result["data"]
+                return inner if isinstance(inner, list) else [inner]
+            return []
         except BitgetAPIError as e:
-            if "404" in str(e) or "NOT FOUND" in str(e):
-                return self._request("GET", "/api/v2/mix/position/all-position", params=params)
-            raise
+            err = str(e)
+            if "404" in err or "NOT FOUND" in err:
+                try:
+                    result = self._request("GET", "/api/v2/mix/position/all-position", params=params)
+                    if isinstance(result, list):
+                        return result
+                    if isinstance(result, dict) and result.get("data"):
+                        inner = result["data"]
+                        return inner if isinstance(inner, list) else [inner]
+                    return []
+                except Exception:
+                    return []
+            # 40085 = "endpoint not available for this account" (spot-only)
+            if "40085" in err or "position not exist" in err.lower() or "no position" in err.lower():
+                return []
+            # Other errors also fall through to [] for status resilience
+            logger.warning(f"get_positions error (returning []): {e}")
+            return []
+        except Exception as e:
+            logger.warning(f"get_positions unexpected error (returning []): {e}")
+            return []
 
     def place_futures_order(
         self,

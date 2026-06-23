@@ -374,6 +374,11 @@ class Agent:
                 positions = self.bitget.get_positions()
             except (BitgetAPIError, Exception):
                 positions = []
+            # Also fetch spot holdings so the user can see what they own
+            try:
+                spot_holdings = self.bitget.get_spot_holdings()
+            except Exception:
+                spot_holdings = []
 
             # Get recent trade stats
             recent = self.db.get_recent_trades(limit=100)
@@ -388,8 +393,52 @@ class Agent:
                 f"💵 Cash (USDT): `${cash:.2f}`\n"
                 f"📈 Total P&L: `${total_pnl:+.2f}`\n"
                 f"🎯 Win rate: `{win_rate:.0f}%` ({wins}W / {losses}L)\n"
-                f"📋 Open positions: `{len(positions)}`\n\n"
+                f"📋 Open futures positions: `{len(positions)}`\n"
+                f"📦 Spot holdings: `{len(spot_holdings)}` symbols\n\n"
             )
+
+            # Show futures positions
+            if positions:
+                text += "*Futures positions:*\n"
+                for p in positions[:5]:
+                    sym = p.get("symbol", "?")
+                    side = p.get("holdSide") or p.get("posSide") or p.get("side", "?")
+                    size = p.get("size", p.get("available", 0))
+                    text += f"  • {sym} {side} {size}\n"
+                text += "\n"
+
+            # Show spot holdings (top 5 by USD value)
+            if spot_holdings:
+                text += "*Spot holdings:*\n"
+                holdings_with_value = []
+                for h in spot_holdings:
+                    sym = h.get("coin", h.get("symbol", "?"))
+                    amt = float(h.get("amount", h.get("available", 0)) or 0)
+                    if sym == "USDT" or amt <= 0:
+                        continue
+                    # Try to get USD value
+                    try:
+                        if not sym.endswith("USDT"):
+                            sym_pair = sym + "USDT"
+                        else:
+                            sym_pair = sym
+                        ticker = self.bitget.get_ticker(sym_pair)
+                        if isinstance(ticker, list) and ticker:
+                            ticker = ticker[0]
+                        price = float(ticker.get("lastPrice", ticker.get("lastPr", 0)))
+                        usd_value = amt * price
+                    except Exception:
+                        usd_value = 0
+                        price = 0
+                    holdings_with_value.append((sym, amt, price, usd_value))
+                # Sort by USD value desc
+                holdings_with_value.sort(key=lambda x: x[3], reverse=True)
+                for sym, amt, price, usd_value in holdings_with_value[:5]:
+                    if usd_value > 0:
+                        text += f"  • {amt:g} {sym} ≈ ${usd_value:.2f} (@${price:.4f})\n"
+                    else:
+                        text += f"  • {amt:g} {sym}\n"
+                text += "\n"
 
             if recent:
                 last_trade = recent[0]
@@ -418,11 +467,20 @@ class Agent:
             ticker = self.bitget.get_ticker(symbol)
             if isinstance(ticker, list) and ticker:
                 ticker = ticker[0]
-            last = float(ticker.get("lastPr", 0))
-            change_24h = float(ticker.get("change24h", 0))
-            high_24h = float(ticker.get("high24h", 0))
-            low_24h = float(ticker.get("low24h", 0))
-            vol_24h = float(ticker.get("baseVolume", 0))
+            # V3 spot: lastPrice, price24hPcnt, highPrice24h, lowPrice24h
+            # V2 spot: lastPr, change24h, high24h, low24h
+            def _t(f3, f2, default=0):
+                v = ticker.get(f3, ticker.get(f2, default))
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    return default
+            last = _t("lastPrice", "lastPr", 0)
+            pct = _t("price24hPcnt", "change24h", 0)
+            change_24h = pct * 100 if abs(pct) < 1 else pct
+            high_24h = _t("highPrice24h", "high24h", 0)
+            low_24h = _t("lowPrice24h", "low24h", 0)
+            vol_24h = _t("volume24h", "baseVolume", 0)
 
             arrow = "🟢" if change_24h >= 0 else "🔴"
             return (
@@ -901,14 +959,20 @@ class Agent:
                 except ValueError:
                     pass
 
-        # Default: 5% of balance
+        # Default: 5% of balance, with a minimum that respects Bitget's $1.01 floor
         if amount_usd is None or amount_usd <= 0:
             try:
                 bal = self.bitget.get_account_balance("USDT") or 0.0
             except Exception:
                 bal = 0.0
             if bal > 0:
-                amount_usd = round(bal * 0.05, 2)
+                # 5% of balance, but at least $1.50 (above Bitget's $1.01 min)
+                # and at most 30% (safety cap)
+                amount_usd = max(round(bal * 0.05, 2), 1.50)
+                amount_usd = min(amount_usd, round(bal * 0.30, 2))
+                # If balance is so small that 30% is still < $1.01, use whatever we can
+                if amount_usd < 1.01:
+                    amount_usd = round(bal * 0.95, 2)  # use almost everything
             else:
                 return (
                     "❌ No balance detected. Specify an amount:\n\n"
@@ -988,7 +1052,12 @@ class Agent:
             except Exception:
                 bal = 0.0
             if bal > 0:
-                amount_usd = round(bal * 0.05, 2)
+                # 5% of balance, but at least $1.50 (above Bitget's $1.01 min)
+                # and at most 30% (safety cap)
+                amount_usd = max(round(bal * 0.05, 2), 1.50)
+                amount_usd = min(amount_usd, round(bal * 0.30, 2))
+                if amount_usd < 1.01:
+                    amount_usd = round(bal * 0.95, 2)
             else:
                 amount_usd = 1.01
         if market == "future":

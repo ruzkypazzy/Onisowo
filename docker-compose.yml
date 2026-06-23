@@ -1,0 +1,28 @@
+version: "3.9"
+
+services:
+  akanji:
+    build: .
+    container_name: akanji
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./db:/opt/akanji/db
+      - ./logs:/opt/akanji/logs
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Optional: schedule periodic /sync via cron
+  # akanji-cron:
+  #   image: alpine
+  #   command: |
+  #     while true; do
+  #       apk add --no-cache sqlite curl
+  #       # refresh TRADE_LOG.md from inside the akanji container
+  #       docker exec akanji python3 scripts/update_trade_log.py
+  #       # ... git push if you want
+  #       sleep 300
+  #     done

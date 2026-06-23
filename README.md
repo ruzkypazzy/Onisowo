@@ -145,25 +145,91 @@ The agent exposes 186 callable skills to Qwen as tools. Some highlights:
 
 ---
 
-## ⚡ The 3-min setup (anyone can do this)
+## ⚡ Pick the install path that fits you
+
+There are 4 ways to install Àkànjí. Pick the one that matches your machine and your privileges.
+
+### Path 1: `curl | bash` on a VPS or server (with root) — most popular
+
+You have: a Linux VPS (Contabo, DigitalOcean, AWS, etc.) with `sudo` access. You want the bot running 24/7 as a systemd service.
 
 ```bash
-# 1. Clone the repo
-git clone https://github.com/ruzkypazzy/Akanji-Onisowo.git
-cd Akanji-Onisowo
-
-# 2. Install deps
-pip install -r requirements.txt
-
-# 3. Set your env vars
-cp .env.example .env
-nano .env   # fill in 5 values (see below)
-
-# 4. Run the bot
-.venv/bin/python main.py
-# OR if you used `bash install.sh`, the systemd service is already running:
-sudo systemctl status akanji
+bash <(curl -sL https://raw.githubusercontent.com/ruzkypazzy/Akanji-Onisowo/main/install.sh)
 ```
+
+The script:
+1. Clones the repo to `/opt/akanji`
+2. Creates a Python venv and installs dependencies
+3. Prompts for 5 required + 1 recommended env vars (Telegram token, Bitget key/secret/passphrase, Qwen key, your Telegram user ID)
+4. Installs a `systemd` service called `akanji` and starts it
+
+After install:
+```bash
+sudo systemctl status akanji   # check status
+sudo journalctl -u akanji -f   # follow logs
+```
+
+### Path 2: `curl | bash` on a Mac or Linux laptop (no root) — for evaluation
+
+You have: macOS or Linux desktop, no `sudo`, just want to try the bot.
+
+```bash
+bash <(curl -sL https://raw.githubusercontent.com/ruzkypazzy/Akanji-Onisowo/main/install.sh) --user
+```
+
+The script:
+1. Clones the repo to `~/akanji` (your home dir, no root needed)
+2. Creates a Python venv and installs dependencies
+3. Prompts for the same 6 env vars
+4. Skips systemd (you're not root)
+5. Shows you the `bash run.sh` command to start the bot
+
+After install:
+```bash
+cd ~/akanji
+bash run.sh                  # foreground, Ctrl+C to stop
+bash run.sh --bg             # background, logs to logs/akanji.log
+bash run.sh --status         # check if running
+bash run.sh --logs           # tail the log file
+bash run.sh --stop           # stop
+```
+
+### Path 3: `git clone` + manual setup (full control)
+
+You have: any machine with Python 3.10+ and git. You want to see every step.
+
+```bash
+git clone https://github.com/ruzkypazzy/Akanji-Onisowo.git ~/akanji
+cd ~/akanji
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+cp .env.example .env
+nano .env   # fill in 5 values (see env table below)
+bash run.sh
+```
+
+### Path 4: Docker (no Python needed)
+
+You have: Docker installed. You want a clean isolated run.
+
+```bash
+git clone https://github.com/ruzkypazzy/Akanji-Onisowo.git ~/akanji
+cd ~/akanji
+cp .env.example .env
+nano .env
+docker compose up -d
+```
+
+(Coming soon: the Dockerfile is in the repo. For now use Path 1, 2, or 3.)
+
+### Which path should I pick?
+
+| You have | Use |
+|---|---|
+| VPS with `sudo`, want 24/7 uptime | **Path 1** (the standard one) |
+| Mac / Linux desktop, no `sudo`, just trying it | **Path 2** (with `--user` flag) |
+| Want to see every step, or you're in a restricted env | **Path 3** (manual) |
+| Docker, want isolation | **Path 4** (when Dockerfile ships) |
 
 You need 6 env vars (5 required, 1 recommended):
 
@@ -179,89 +245,6 @@ You need 6 env vars (5 required, 1 recommended):
 **API key safety**: Always create your Bitget API key with **Withdraw disabled**. Àkànjí cannot withdraw your funds — only trade with them.
 
 **Owner gate**: Set `OWNER_TELEGRAM_ID` in `.env` and restart. The bot will reject all real-trade commands from any other Telegram user, but they'll still see `/demo`, `/tour`, `/skills`, and the install command. Demo mode is automatic for everyone except you.
-
----
-
-## 🪄 One-line install (copy-paste this to any LLM)
-
-If you want any LLM to install Àkànjí for you, paste this prompt:
-
-> "I want to install **Àkànjí Oníṣòwò**, an open-source Bitget AI trading agent that runs in Telegram. Here's the install command — run it and then help me configure it:
->
-> ```bash
-> bash <(curl -sL https://raw.githubusercontent.com/ruzkypazzy/Akanji-Onisowo/main/install.sh)
-> ```
->
-> It will:
-> 1. Clone the repo to `/opt/akanji`
-> 2. Create a Python venv and install deps
-> 3. Generate `.env` from `.env.example`
-> 4. Ask me for: `TELEGRAM_BOT_TOKEN` (from @BotFather), `BITGET_API_KEY`, `BITGET_SECRET_KEY`, `BITGET_PASSPHRASE` (from Bitget API management, **Withdraw disabled**), and `BITGET_QWEN_API_KEY` (Qwen 3.6 Plus).
-> 5. Run the bot as a systemd service called `akanji` and start it
->
-> Repo: https://github.com/ruzkypazzy/Akanji-Onisowo
-> Help: https://github.com/ruzkypazzy/Akanji-Onisowo/wiki"
-
-### Or run the install script directly
-
-```bash
-bash <(curl -sL https://raw.githubusercontent.com/ruzkypazzy/Akanji-Onisowo/main/install.sh)
-```
-
-The script:
-1. Clones the repo to `/opt/akanji`
-2. Creates a Python venv and installs `requirements.txt`
-3. Generates `.env` from `.env.example`
-4. Prompts for: `TELEGRAM_BOT_TOKEN`, `BITGET_API_KEY`, `BITGET_SECRET_KEY`, `BITGET_PASSPHRASE`, `BITGET_QWEN_API_KEY`
-5. Installs a `systemd` service called `akanji` and starts it
-
-### Manual install (if you prefer)
-
-```bash
-git clone https://github.com/ruzkypazzy/Akanji-Onisowo.git /opt/akanji
-cd /opt/akanji
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-nano .env
-.venv/bin/python main.py
-```
-
-### systemd service (optional but recommended)
-
-```bash
-sudo tee /etc/systemd/system/akanji.service > /dev/null <<EOF
-[Unit]
-Description=Àkànjí Oníṣòwò — AI Trading Agent
-After=network.target
-
-[Service]
-Type=simple
-User=$USER
-WorkingDirectory=/opt/akanji
-ExecStart=/opt/akanji/.venv/bin/python main.py
-Restart=always
-RestartSec=10
-EnvironmentFile=/opt/akanji/.env
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo systemctl daemon-reload
-sudo systemctl enable --now akanji
-sudo systemctl status akanji
-```
-
-Manage it with:
-```bash
-sudo systemctl start akanji
-sudo systemctl stop akanji
-sudo systemctl restart akanji
-sudo systemctl status akanji
-sudo journalctl -u akanji -f    # live logs
-```
 
 ---
 
@@ -382,7 +365,7 @@ This is fully open-source. The repo at [github.com/ruzkypazzy/Akanji-Onisowo](ht
 - **The agent loop** in `agent/core.py` (perceive → decide → execute → reflect)
 - **The strategist** in `agent/strategist.py` (the autonomous loop that scans and trades)
 - **41 unit tests** that pass: `python3 -m unittest tests.test_smoke`
-- **One-shot install** that gets you running in 5 minutes: `bash install.sh`
+- **4 install paths** — root or no root, Mac/Linux/VPS, your choice
 
 ### Step 3: Try it for real (optional)
 
@@ -391,7 +374,7 @@ If you want to use Àkànjí with your own Bitget account:
 ```bash
 git clone https://github.com/ruzkypazzy/Akanji-Onisowo
 cd Akanji-Onisowo
-bash install.sh   # 5 minutes, prompts for 6 env vars
+bash install.sh            # or --user for no-root, --dir=PATH for custom
 .venv/bin/python main.py
 ```
 
@@ -405,7 +388,7 @@ The installer creates a Python venv, installs deps, generates `.env` from your i
 - **Qwen 3.6 Plus is the brain** — every reasoning line in `/journal` was generated by Qwen
 - **Self-critique is real** — `loss_autopsy`, `edge_half_life_tracker`, weekly `/reflect`
 - **Honest failure modes** — the agent can lose, and it tells you why (`/tour` shows the loss_autopsy tags)
-- **Open source, your keys, your VPS** — the install really is 5 minutes
+- **Open source, your keys, your machine** — pick the install path that fits
 
 If you have questions, message me on X ([@ruzkypazzy](https://github.com/ruzkypazzy)) or open an issue on GitHub.
 

@@ -99,7 +99,11 @@ Project description (this doc) is also published at:
      - `/about` — who Àkànjí is, the 4-stage loop, the stack
      - `/demo` — a 60-second scripted trade demo
      - `/tour` — walk through the 23 real closed trades with the full skill trail
-   - All three are safe. No real money is touched.
+     - `/analyze BTCUSDT 1` — the live agent loop in action. Real Qwen, real
+       market data, real 17+ skill chain. Returns a recommendation with
+       reasoning, TP/SL, and risks. **No real order is placed** — just
+       shows what `/pick` would do.
+   - All four are safe. No real money is touched.
 
 ### 🟦 Track 1 — Trading Agent — OPTIONAL
 

@@ -1854,10 +1854,29 @@ class Agent:
             # Open journal trades
             open_trades = self.db.get_open_trades()
             closed = []
+            skipped_grace = []
+            # Grace period: never auto-close a trade that was just opened.
+            # The position may not have propagated to Bitget's position
+            # endpoint yet, or the user is mid-fill. 5 minutes is generous.
+            import time as _time
+            GRACE_PERIOD_SEC = 300
+            now_ts = _time.time()
             for t in open_trades:
                 sym = t.get("symbol", "")
                 order_type = t.get("order_type", "spot")
                 base = sym.replace("USDT", "")
+                # Skip trades that just opened (grace period)
+                opened_at = t.get("opened_at") or ""
+                try:
+                    # opened_at is an ISO string like "2026-06-23T12:19:00"
+                    from datetime import datetime
+                    opened_ts = datetime.fromisoformat(opened_at).timestamp() if opened_at else 0
+                except Exception:
+                    opened_ts = 0
+                age_sec = now_ts - opened_ts
+                if 0 < age_sec < GRACE_PERIOD_SEC:
+                    skipped_grace.append(f"#{t.get('id')} {sym} ({int(age_sec)}s old)")
+                    continue
                 if order_type == "futures":
                     is_live = sym in live_futures_by_symbol
                 else:
@@ -1900,8 +1919,12 @@ class Agent:
                 lines.append(f"*Closed {len(closed)} trade(s) that no longer exist on Bitget:*")
                 for c in closed:
                     lines.append(f"  • {c}")
-            if not closed:
+            elif not skipped_grace:
                 lines.append("✅ No orphan journal trades. Everything is in sync.")
+            if skipped_grace:
+                lines.append(f"\n⏱️ Skipped {len(skipped_grace)} trade(s) in grace period (5 min, gives Bitget time to propagate):")
+                for s in skipped_grace[:5]:
+                    lines.append(f"  • {s}")
             if futures_error:
                 lines.append(f"\n⚠️ Bitget futures positions query failed: {futures_error}")
             return "\n".join(lines)

@@ -511,42 +511,59 @@ class BitgetClient:
             raise
 
     def get_positions(self, product_type: str = "USDT-FUTURES") -> list:
-        """Get all open futures positions. Tries V3 then V2.
+        """Get all open futures positions.
 
-        Returns [] for spot-only accounts (no futures positions) instead of
-        raising. This is the case for users who only do spot trading.
+        Tries multiple endpoint variations for UTA compatibility:
+          1. V3 /api/v3/position/all-position with productType + marginCoin
+          2. V3 same with just marginCoin (UTA unified)
+          3. V2 /api/v2/mix/position/all-position (classic)
+
+        Returns [] on no positions or any error.
         """
-        params = {"productType": product_type, "marginCoin": "USDT"}
-        try:
-            result = self._request("GET", "/api/v3/position/all-position", params=params)
-            if isinstance(result, list):
-                return result
-            if isinstance(result, dict) and result.get("data"):
-                inner = result["data"]
-                return inner if isinstance(inner, list) else [inner]
-            return []
-        except BitgetAPIError as e:
-            err = str(e)
-            if "404" in err or "NOT FOUND" in err:
-                try:
-                    result = self._request("GET", "/api/v2/mix/position/all-position", params=params)
-                    if isinstance(result, list):
-                        return result
-                    if isinstance(result, dict) and result.get("data"):
-                        inner = result["data"]
-                        return inner if isinstance(inner, list) else [inner]
-                    return []
-                except Exception:
-                    return []
-            # 40085 = "endpoint not available for this account" (spot-only)
-            if "40085" in err or "position not exist" in err.lower() or "no position" in err.lower():
-                return []
-            # Other errors also fall through to [] for status resilience
-            logger.warning(f"get_positions error (returning []): {e}")
-            return []
-        except Exception as e:
-            logger.warning(f"get_positions unexpected error (returning []): {e}")
-            return []
+        # Try a sequence of endpoint+params variants. We try them all and
+        # merge the non-empty results, because Bitget sometimes returns
+        # positions on one variant but not another (e.g. UTA unified vs
+        # classic mix endpoint).
+        all_found = []
+        tried = set()
+        for endpoint, params in [
+            ("/api/v3/position/all-position", {"productType": product_type, "marginCoin": "USDT"}),
+            ("/api/v3/position/all-position", {"marginCoin": "USDT"}),
+            ("/api/v3/position/all-position", {"productType": product_type}),
+            ("/api/v2/mix/position/all-position", {"productType": product_type, "marginCoin": "USDT"}),
+            ("/api/v2/mix/position/all-position", {"marginCoin": "USDT"}),
+        ]:
+            key = (endpoint, tuple(sorted(params.items())))
+            if key in tried:
+                continue
+            tried.add(key)
+            try:
+                result = self._request("GET", endpoint, params=params)
+                positions = []
+                if isinstance(result, list):
+                    positions = result
+                elif isinstance(result, dict) and result.get("data"):
+                    inner = result["data"]
+                    positions = inner if isinstance(inner, list) else [inner]
+                # Dedupe by symbol
+                for p in positions:
+                    if isinstance(p, dict) and p.get("symbol"):
+                        if not any(existing.get("symbol") == p.get("symbol") for existing in all_found):
+                            all_found.append(p)
+            except BitgetAPIError as e:
+                err = str(e)
+                if "40085" in err or "position not exist" in err.lower():
+                    # Endpoint not available for this account type
+                    continue
+                # Other errors are logged but we keep trying
+                logger.debug(f"get_positions variant {endpoint}?{params} failed: {e}")
+                continue
+            except Exception as e:
+                logger.debug(f"get_positions variant {endpoint}?{params} crashed: {e}")
+                continue
+        if all_found:
+            logger.info(f"get_positions found {len(all_found)} position(s): {[p.get('symbol') for p in all_found]}")
+        return all_found
 
     def place_futures_order(
         self,

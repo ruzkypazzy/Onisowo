@@ -339,12 +339,17 @@ MIT — do whatever, just don't blame us if your agent gets rekt.
 
 ## 📝 Note to Reviewer
 
-The bot at [@OnisowoBot](https://t.me/OnisowoBot) is locked to its owner's Telegram user ID, so you can't trade on their account. To see what it does, type these commands in Telegram:
+The bot at [@OnisowoBot](https://t.me/OnisowoBot) is **temporarily open for review**. The owner has unlocked it (removed the Telegram user ID gate from `.env`) and loaded a **$10 USDT test balance** so judges can run real trades end-to-end. After the review period the owner will re-lock the bot to their Telegram user ID.
+
+You can run any of these in Telegram:
 
 - `/about` — who Àkànjí is, the 4-stage loop, the stack
 - `/demo` — a 60-second scripted trade demo
 - `/tour` — walk through real closed trades with the full skill trail
-- `/analyze BTCUSDT 1` — **live agent loop**. Runs the full 4-stage perceive→decide→execute→reflect with real Qwen, real market data, and 17+ skills. Returns a recommendation with reasoning, TP/SL, and risks. **No real order is placed** — it just shows what `/pick` would do.
+- `/analyze BTCUSDT 1` — **live agent loop**. Real Qwen, real market data, real 17+ skill chain. No real order is placed; just shows what `/pick` would do.
+- `/pick`, `/pickfuture`, `/pickspot` — **real trades on the $10 test balance**. Minimum $1.01, capped at 25% of balance per trade. TP/SL attached. Use sparingly.
+
+**Owner gate by default** (when you install your own copy): the installer prompts for `OWNER_TELEGRAM_ID` so only the owner can run real-trade commands. This is the recommended setup. The owner removed it temporarily to let judges in.
 
 If you want to use Àkànjí in real time, install your own copy — it's open source. Pick whichever install path fits your machine:
 

@@ -94,16 +94,24 @@ Project description (this doc) is also published at:
 
 ✅ **Live bot** (public, no login required to view):
    https://t.me/OnisowoBot
-   - The bot is locked to the owner's Telegram user ID for trading.
-   - Anyone can run these read-only commands in the bot:
+   - The bot is **temporarily unlocked for review**. The owner has
+     removed the Telegram user ID gate from `.env` and loaded a
+     **$10 USDT test balance** so judges can run real trades.
+     After the review period the owner will re-lock to their ID.
+   - Commands available right now:
      - `/about` — who Àkànjí is, the 4-stage loop, the stack
      - `/demo` — a 60-second scripted trade demo
      - `/tour` — walk through the 23 real closed trades with the full skill trail
-     - `/analyze BTCUSDT 1` — the live agent loop in action. Real Qwen, real
-       market data, real 17+ skill chain. Returns a recommendation with
-       reasoning, TP/SL, and risks. **No real order is placed** — just
-       shows what `/pick` would do.
-   - All four are safe. No real money is touched.
+     - `/analyze BTCUSDT 1` — live agent loop. Real Qwen, real market
+       data, real 17+ skill chain. No real order is placed; just shows
+       what `/pick` would do.
+     - `/pick`, `/pickfuture`, `/pickspot` — real trades on the $10 test
+       balance. Minimum $1.01, capped at 25% of balance per trade. TP/SL
+       attached. Use sparingly.
+   - **Owner gate by default** (when you install your own copy): the
+     installer prompts for `OWNER_TELEGRAM_ID` so only the owner can
+     run real-trade commands. This is the recommended setup. The
+     owner removed the gate temporarily to let judges in.
 
 ### 🟦 Track 1 — Trading Agent — OPTIONAL
 

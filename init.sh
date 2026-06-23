@@ -36,7 +36,7 @@ if [ "${2#--platform=}" != "$2" ]; then
 fi
 
 SERVICE_NAME="akanji"
-REPO_URL="https://github.com/ruzkypazzy/Onisowo.git"
+REPO_URL="https://github.com/ruzkypazzy/Akanji-Onisowo.git"
 INSTALL_DIR="/opt/akanji"
 DATA_DIR="/var/lib/akanji"
 

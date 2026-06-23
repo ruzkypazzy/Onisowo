@@ -2,7 +2,7 @@
 
 Canonical install location: **`/opt/akanji`** on your VPS (185.2.101.34).
 
-The repo on GitHub is `ruzkypazzy/Onisowo` — the folder on your VPS is `akanji` because that's the systemd service name. **Don't get confused** — they're the same codebase.
+The repo on GitHub is `ruzkypazzy/Akanji-Onisowo` — the folder on your VPS is `akanji` because that's the systemd service name. **Don't get confused** — they're the same codebase.
 
 ---
 
@@ -27,7 +27,7 @@ That's it for a normal update.
 ssh root@185.2.101.34
 
 # Clone the repo at /opt/akanji
-git clone https://github.com/ruzkypazzy/Onisowo.git /opt/akanji
+git clone https://github.com/ruzkypazzy/Akanji-Onisowo.git /opt/akanji
 cd /opt/akanji
 
 # Run the installer (3 min)
@@ -123,7 +123,7 @@ After `sudo systemctl status akanji` shows `active (running)`:
 
 ## Hackathon submission
 
-- **Repo URL:** https://github.com/ruzkypazzy/Onisowo
+- **Repo URL:** https://github.com/ruzkypazzy/Akanji-Onisowo
 - **Telegram bot:** https://t.me/OnisowoBot
 - **Hackathon:** [Bitget AI Base Camp S1](https://bitget-ai.gitbook.io/base-camp-hackathon-s1-en)
 - **Track:** 1 — Trading Agent

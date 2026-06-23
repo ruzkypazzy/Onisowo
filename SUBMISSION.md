@@ -4,7 +4,7 @@
 **Track**: 1 — Trading Agent
 **Submitted by**: ruzkypazzy (Bitget UID 7781181263)
 **Demo**: https://t.me/OnisowoBot
-**Repo**: https://github.com/ruzkypazzy/Onisowo
+**Repo**: https://github.com/ruzkypazzy/Akanji-Onisowo
 **Date**: 2026-06-19
 **LLM brain**: **Qwen 3.6 Plus** (Alibaba Cloud, via the Bitget hackathon proxy)
 
@@ -29,7 +29,7 @@
 
 **Built with**: Bitget Agent Hub (spot + futures APIs, 58 tools), **Qwen 3.6 Plus** (LLM), Telegram (surface), SQLite (memory), Python 3.10+.
 
-**Hackathon tracks**: Track 1 — Trading Agent. Submission: demo link (Telegram bot, public) + this 200-word writeup. Code: github.com/ruzkypazzy/Onisowo (MIT).
+**Hackathon tracks**: Track 1 — Trading Agent. Submission: demo link (Telegram bot, public) + this 200-word writeup. Code: github.com/ruzkypazzy/Akanji-Onisowo (MIT).
 
 ---
 
@@ -47,7 +47,7 @@ Every command you send is processed by Qwen. Every reasoning line you see in the
 ## How to self-host (the real differentiator)
 
 ```bash
-git clone https://github.com/ruzkypazzy/Onisowo.git /opt/akanji
+git clone https://github.com/ruzkypazzy/Akanji-Onisowo.git /opt/akanji
 cd /opt/akanji
 bash init.sh   # creates venv, installs deps, prompts for .env
 nano .env      # fill in 5 env vars (Telegram token, Bitget key, Qwen key)
@@ -82,6 +82,6 @@ The differentiators (multi-agent debate, 71 indicators, recursive self-improveme
 
 ## Open source
 
-MIT licensed. https://github.com/ruzkypazzy/Onisowo
+MIT licensed. https://github.com/ruzkypazzy/Akanji-Onisowo
 
 Built during the Bitget AI Base Camp Hackathon S1 (May 27 – June 30, 2026). **Brain: Qwen 3.6 Plus.**

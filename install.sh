@@ -1,10 +1,10 @@
 #!/bin/bash
 # Àkànjí Oníṣòwò — one-line installer
-# Run with: bash <(curl -sL https://raw.githubusercontent.com/ruzkypazzy/Onisowo/main/install.sh)
+# Run with: bash <(curl -sL https://raw.githubusercontent.com/ruzkypazzy/Akanji-Onisowo/main/install.sh)
 
 set -e
 INSTALL_DIR="/opt/akanji"
-REPO_URL="https://github.com/ruzkypazzy/Onisowo.git"
+REPO_URL="https://github.com/ruzkypazzy/Akanji-Onisowo.git"
 
 echo "═══════════════════════════════════════════════════════════"
 echo "  Àkànjí Oníṣòwò — Yoruba AI Trading Agent for Bitget"

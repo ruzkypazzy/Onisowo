@@ -149,8 +149,8 @@ The agent exposes 186 callable skills to Qwen as tools. Some highlights:
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/ruzkypazzy/Onisowo.git
-cd Onisowo
+git clone https://github.com/ruzkypazzy/Akanji-Onisowo.git
+cd Akanji-Onisowo
 
 # 2. Install deps
 pip install -r requirements.txt
@@ -184,7 +184,7 @@ If you want any LLM to install Àkànjí for you, paste this prompt:
 > "I want to install **Àkànjí Oníṣòwò**, an open-source Bitget AI trading agent that runs in Telegram. Here's the install command — run it and then help me configure it:
 >
 > ```bash
-> bash <(curl -sL https://raw.githubusercontent.com/ruzkypazzy/Onisowo/main/install.sh)
+> bash <(curl -sL https://raw.githubusercontent.com/ruzkypazzy/Akanji-Onisowo/main/install.sh)
 > ```
 >
 > It will:
@@ -194,13 +194,13 @@ If you want any LLM to install Àkànjí for you, paste this prompt:
 > 4. Ask me for: `TELEGRAM_BOT_TOKEN` (from @BotFather), `BITGET_API_KEY`, `BITGET_SECRET_KEY`, `BITGET_PASSPHRASE` (from Bitget API management, **Withdraw disabled**), and `BITGET_QWEN_API_KEY` (Qwen 3.6 Plus).
 > 5. Run the bot as a systemd service called `akanji` and start it
 >
-> Repo: https://github.com/ruzkypazzy/Onisowo
-> Help: https://github.com/ruzkypazzy/Onisowo/wiki"
+> Repo: https://github.com/ruzkypazzy/Akanji-Onisowo
+> Help: https://github.com/ruzkypazzy/Akanji-Onisowo/wiki"
 
 ### Or run the install script directly
 
 ```bash
-bash <(curl -sL https://raw.githubusercontent.com/ruzkypazzy/Onisowo/main/install.sh)
+bash <(curl -sL https://raw.githubusercontent.com/ruzkypazzy/Akanji-Onisowo/main/install.sh)
 ```
 
 The script:
@@ -213,7 +213,7 @@ The script:
 ### Manual install (if you prefer)
 
 ```bash
-git clone https://github.com/ruzkypazzy/Onisowo.git /opt/akanji
+git clone https://github.com/ruzkypazzy/Akanji-Onisowo.git /opt/akanji
 cd /opt/akanji
 python3 -m venv .venv
 source .venv/bin/activate
@@ -352,7 +352,7 @@ This project was built for the [Bitget AI Base Camp Hackathon S1](https://bitget
 - **Track**: 1 — Trading Agent
 - **Submission type**: Open-source, self-hostable
 - **Demo link**: https://t.me/OnisowoBot (the live bot, public, anyone can message)
-- **Repo**: https://github.com/ruzkypazzy/Onisowo
+- **Repo**: https://github.com/ruzkypazzy/Akanji-Onisowo
 - **Submission writeup**: [see SUBMISSION.md](SUBMISSION.md)
 
 ---

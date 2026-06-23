@@ -71,4 +71,4 @@ fi
 echo ""
 echo "✓ Uninstalled."
 echo ""
-echo "To reinstall, run: bash <(curl -fsSL https://raw.githubusercontent.com/ruzkypazzy/Onisowo/main/init.sh)"
+echo "To reinstall, run: bash <(curl -fsSL https://raw.githubusercontent.com/ruzkypazzy/Akanji-Onisowo/main/init.sh)"

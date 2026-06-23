@@ -13,7 +13,7 @@ elif [ -d ~/akanji/.git ]; then
 else
   echo "❌ Can't find the akanji repo. Tried: /opt/akanji, ~/akanji, script-relative."
   echo "Run this from inside the repo, or set up the repo at /opt/akanji first:"
-  echo "  sudo git clone https://github.com/ruzkypazzy/Onisowo.git /opt/akanji"
+  echo "  sudo git clone https://github.com/ruzkypazzy/Akanji-Onisowo.git /opt/akanji"
   exit 1
 fi
 echo "→ Working dir: $(pwd)"

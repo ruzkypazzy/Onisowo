@@ -359,7 +359,7 @@ class Agent:
             "• *Recursive self-improvement* — reviews past trades, writes new rules to memory\n"
             "• *Qwen-powered* — Qwen 3.6 Plus is the brain; every decision is a Qwen decision\n"
             "• *Self-hostable* — your keys never leave your machine\n\n"
-            "Source: [github.com/ruzkypazzy/Onisowo](https://github.com/ruzkypazzy/Onisowo)"
+            "Source: [github.com/ruzkypazzy/Akanji-Onisowo](https://github.com/ruzkypazzy/Akanji-Onisowo)"
         )
 
     def _cmd_status(self, ctx: AgentContext) -> str:

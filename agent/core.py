@@ -2409,12 +2409,18 @@ class Agent:
                 tp_price = exec_result.get("tp_price", 0) if isinstance(exec_result, dict) else 0
                 sl_price = exec_result.get("sl_price", 0) if isinstance(exec_result, dict) else 0
                 # Build a clean receipt — no raw JSON.
+                # exec_result may be nested: {'order': {...}, 'journal': {...}, 'ok': true}
+                # Top-level trade_id may also exist; check both.
                 order_id = ""
+                trade_id = ""
                 if isinstance(exec_result, dict):
                     order = exec_result.get("order", {}) or {}
                     if isinstance(order, dict):
                         order_id = order.get("orderId", "") or order.get("order_id", "")
                     order_id = order_id or exec_result.get("orderId", "") or exec_result.get("order_id", "")
+                    trade_id = exec_result.get("trade_id", "")
+                    if not trade_id and isinstance(exec_result.get("journal"), dict):
+                        trade_id = exec_result["journal"].get("trade_id", "")
                 # Skills used for this trade (the actual ones that fired)
                 skills_list = self.skills.get_skill_trace() or [
                     "universe_scan", "score_symbol", "get_ticker", "get_candles",
@@ -2439,7 +2445,7 @@ class Agent:
                     f"🛠 *Why:* Auto-picked highest-scoring candidate from {len(scored)} analyzed. "
                     f"TP/SL attached — Bitget will close automatically.\n"
                     f"🧰 *Skills used:* {skills_str}\n"
-                    f"📜 *Journaled:* #{exec_result.get('trade_id', '?')}"
+                    f"📜 *Journaled:* #{trade_id if trade_id else '?'}"
                 )
             except Exception as e:
                 return f"❌ Futures order failed: {e}"
@@ -2690,6 +2696,8 @@ class Agent:
                 tp_pct = exec_result.get("tp_pct", 0) if isinstance(exec_result, dict) else 0
                 sl_pct = exec_result.get("sl_pct", 0) if isinstance(exec_result, dict) else 0
                 # Build a clean receipt — no raw JSON.
+                # exec_result may be nested: {'order': {...}, 'journal': {...}, 'ok': true}
+                # Top-level trade_id may also exist.
                 order_id = ""
                 trade_id = ""
                 if isinstance(exec_result, dict):
@@ -2697,7 +2705,10 @@ class Agent:
                     if isinstance(order, dict):
                         order_id = order.get("orderId", "") or order.get("order_id", "")
                     order_id = order_id or exec_result.get("orderId", "")
+                    # trade_id can be top-level OR nested under 'journal'
                     trade_id = exec_result.get("trade_id", "")
+                    if not trade_id and isinstance(exec_result.get("journal"), dict):
+                        trade_id = exec_result["journal"].get("trade_id", "")
                 skills_list = self.skills.get_skill_trace() or [
                     "universe_scan", "score_symbol", "get_ticker", "get_candles",
                     "rsi", "macd", "adx", "support_resistance_levels",
@@ -2720,7 +2731,7 @@ class Agent:
                     f"📋 *TP/SL:* +{tp_pct:.1f}% / {sl_pct:.1f}% (monitored)\n"
                     f"🛠 *Qwen analysis:* {len(steps_log)} tool calls\n"
                     f"🧰 *Skills used:* {skills_str}\n"
-                    f"📜 *Journaled:* #{trade_id or '?'}"
+                    f"📜 *Journaled:* #{trade_id if trade_id else '?'}"
                 )
             except Exception as e:
                 return (

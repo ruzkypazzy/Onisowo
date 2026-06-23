@@ -147,15 +147,10 @@ def run_bot(token: Optional[str] = None):
     # Register the command list with Telegram so they show as clickable chips
     # in the chat UI (instead of having to type /command manually).
     async def _post_init(app):
-        # Start the background sync task that watches for trades the user
-        # closed manually in the Bitget app, or that got auto-closed by
-        # TP/SL. The task waits for the first user message to capture the
-        # chat_id, then runs every 60s and notifies the user on deltas.
-        try:
-            tracker = asyncio.create_task(_track_user(app))
-            app.bot_data["sync_tracker"] = tracker
-        except Exception as e:
-            logger.exception(f"Failed to start background sync tracker: {e}")
+        # Auto-sync is disabled per user request (2026-06-23). The position
+        # read on the user's account was returning [] for live positions,
+        # causing the sync to falsely close real trades. Use /sync manually
+        # to reconcile when you want to.
         from telegram import BotCommand
         commands = [
             BotCommand("start", "Àkànjí greeting"),
@@ -203,90 +198,25 @@ def run_bot(token: Optional[str] = None):
         logger.info("Telegram bot commands registered (clickable in chat UI)")
 
     async def _post_shutdown(app):
-        # Cancel background sync job
-        sync_task = app.bot_data.get("sync_task")
-        if sync_task and not sync_task.done():
-            sync_task.cancel()
-            try:
-                await sync_task
-            except Exception:
-                pass
-        logger.info("Telegram bot shutdown: background tasks cancelled")
+        # No-op: background sync is disabled (user runs /sync manually).
+        logger.info("Telegram bot shutdown: cleanup complete")
 
     app.post_init = _post_init
     app.post_shutdown = _post_shutdown
 
     async def _background_sync(app):
-        """Background task: every 60s, reconcile journal with live Bitget.
+        """DISABLED (2026-06-23): user requested manual sync only.
 
-        Catches trades the user closed in the Bitget app, or positions
-        that got auto-closed by TP/SL. Runs silently unless there are
-        deltas — then it sends a status message to the user.
+        The auto-sync was closing live trades because the position read
+        returned [] for futures that actually existed. Use /sync manually
+        to reconcile the journal with Bitget.
         """
-        from agent.core import AgentContext
-        sync_user_id = app.bot_data.get("user_id", "")
-        last_user_msg = {}  # chat_id -> last message id
-        # Find the most recent user chat_id from application
-        chat_id = app.bot_data.get("chat_id", "")
-        logger.info(f"Background sync started (interval=60s, chat_id={chat_id})")
-        try:
-            while True:
-                await asyncio.sleep(60)
-                try:
-                    sync_agent = app.bot_data.get("agent")
-                    if not sync_agent:
-                        continue
-                    if not chat_id:
-                        continue
-                    # Build a synthetic /sync context
-                    ctx = AgentContext(
-                        user_id=sync_user_id,
-                        user_message="/sync",
-                        command="sync",
-                        args={},
-                    )
-                    response = await asyncio.to_thread(sync_agent.handle, ctx)
-                    # If response indicates work was done, send a heads-up
-                    if "Closed" in response and "No orphan" not in response:
-                        # Only notify if there were real closes
-                        if "Closed " in response and ("#1" in response or "#2" in response or
-                                                       "#3" in response or "#4" in response or
-                                                       "#5" in response):
-                            try:
-                                await app.bot.send_message(
-                                    chat_id=chat_id,
-                                    text=f"🔄 *Auto-sync caught something:*\n\n{response}",
-                                    parse_mode="Markdown",
-                                )
-                            except Exception as e:
-                                logger.debug(f"Auto-sync notification failed: {e}")
-                except asyncio.CancelledError:
-                    raise
-                except Exception as e:
-                    logger.exception(f"Background sync error: {e}")
-        except asyncio.CancelledError:
-            logger.info("Background sync cancelled")
-            raise
+        logger.info("Background sync is disabled; user runs /sync manually.")
+        return
 
     async def _track_user(app):
-        """Capture the user's chat_id on the first message so background sync
-        has a place to send notifications."""
-        chat_id = app.bot_data.get("chat_id", "")
-        # Already set if we re-entered
-        if chat_id:
-            return
-        # Wait for first message — update handler will populate chat_id
-        # We poll for it for up to 60s
-        for _ in range(60):
-            await asyncio.sleep(1)
-            if app.bot_data.get("chat_id"):
-                chat_id = app.bot_data["chat_id"]
-                # Start the background sync job
-                task = asyncio.create_task(_background_sync(app))
-                app.bot_data["sync_task"] = task
-                logger.info(f"User chat_id captured: {chat_id}. Background sync scheduled.")
-                return
-        logger.warning("No user chat_id captured in 60s. Background sync not started.")
+        """DISABLED (2026-06-23): no-op, kept for backward compatibility."""
+        return
 
     # -------------------------------------------------------------------------
     # Handlers

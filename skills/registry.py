@@ -1258,8 +1258,12 @@ class SkillsRegistry:
             pass
         # 3. Place the order
         order_result = self._s_place_spot_order(symbol=symbol, side=side, size_usd=size_usd)
-        if not order_result.get("ok"):
-            return order_result
+        # The bitget client returns {"orderId": ..., "clientOid": ...} on
+        # success or {"ok": False, "error": ...} on failure. Either way,
+        # we check the orderId as the success signal.
+        inner_check = order_result.get("result", order_result) if isinstance(order_result, dict) else {}
+        if not isinstance(order_result, dict) or (not order_result.get("ok") and not (isinstance(inner_check, dict) and inner_check.get("orderId"))):
+            return {"ok": False, "error": order_result.get("error", "place_spot_order failed") if isinstance(order_result, dict) else "unknown"}
         # 4. Extract orderId
         inner = order_result.get("result", order_result)
         order_id = ""
